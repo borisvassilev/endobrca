@@ -1,0 +1,51 @@
+CREATE TABLE patient_survival (
+  "Barcode" TEXT,
+  "Event" TEXT,
+  "Days" INTEGER
+);
+CREATE TABLE mirna (
+  mirna TEXT,
+  gene TEXT,
+  refseqid TEXT,
+  sum INTEGER
+);
+CREATE TABLE ampl_rownames(
+  "Ensembl Gene ID" TEXT
+);
+CREATE TABLE mrna_rownames(
+  "Ensembl Gene ID" TEXT
+);
+CREATE TABLE portion_analyte(
+  "Code" TEXT,
+  "Definition" TEXT
+);
+CREATE TABLE sample_type(
+  "Code" TEXT,
+  "Definition" TEXT,
+  "Short Letter Code" TEXT
+);
+CREATE TABLE tissue_source_site(
+  "TSS Code" TEXT,
+  "Source Site" TEXT,
+  "Study Name" TEXT,
+  "BCR" TEXT
+);
+CREATE TABLE id_descr_name(
+  "Ensembl Gene ID" TEXT,
+  "Description" TEXT,
+  "Associated Gene Name" TEXT
+);
+CREATE TABLE ampl_cols(
+  "Barcode" TEXT,
+  "TSS Code" TEXT,
+  "Patient" TEXT
+);
+CREATE TABLE mrna_cols(
+  "Barcode" TEXT,
+  "TSS Code" TEXT,
+  "Patient" TEXT,
+  "Sample" TEXT,
+  "Vial" TEXT,
+  "Portion" TEXT,
+  "Analyte" TEXT
+);

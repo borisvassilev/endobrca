@@ -1,0 +1,2242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="generator" content="pandoc">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <meta name="author" content="Boris Vassilev; Elina Ikonen">
+  <title>TCGA breast cancer data analysis</title>
+  <style type="text/css">code{white-space: pre;}</style>
+  <link rel="stylesheet" href="/home/bvassile/lib/lir/lir.css">
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header>
+<h1 class="title">TCGA breast cancer data analysis</h1>
+<h2 class="author">Boris Vassilev; Elina Ikonen</h2>
+<h3 class="date">2016-05-19 13:00:07 UTC</h3>
+</header>
+<nav id="TOC">
+<ul>
+<li><a href="#input-data">Input data</a><ul>
+<li><a href="#amplification-and-transcript-levels">Amplification and transcript levels</a></li>
+<li><a href="#mapping-gene-ids-to-names">Mapping gene IDs to names</a></li>
+<li><a href="#meta-data-tcga-ensembl">Meta data: TCGA, Ensembl</a></li>
+</ul></li>
+<li><a href="#gene-association">Gene association</a><ul>
+<li><a href="#pairs-of-genes">Pairs of genes</a></li>
+<li><a href="#association-results">Association results</a></li>
+<li><a href="#plotting-the-results">Plotting the results</a></li>
+</ul></li>
+<li><a href="#survival">Survival</a><ul>
+<li><a href="#clinical-patient-data">Clinical patient data</a></li>
+<li><a href="#long-term-survival">Long-term survival</a></li>
+<li><a href="#effects-on-long-term-patient-survival">Effects on long-term patient survival</a></li>
+</ul></li>
+<li><a href="#protein-complexes-regulated-by-micro-rna">Protein complexes regulated by micro-RNA</a><ul>
+<li><a href="#micro-rnas-and-predicted-targets">Micro-RNAs and predicted targets</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="input-data">Input data</h1>
+<p>For all breast cancer patients, we have genome-wide amplification and transcript level data. Patients and samples are identified by their TCGA “barcodes”. There is relevant meta-data embedded in these barcodes.</p>
+<p>Genes are identified by their Enseml Gene IDs.</p>
+<h2 id="amplification-and-transcript-levels">Amplification and transcript levels</h2>
+<p>Our collaborator Riku Louhimo has pre-processed the genome-wide data available from TCGA for all breast cancer samples and provided two sets of data. Both sets have one gene on every row, with each field representing one sample.</p>
+<p>The first set contains DNA <em>amplification calls</em>: a matrix of 1 (Amplified), 0 (Not amplified), or <code>NA</code> (Not available). The other set contains mRNA <em>transcript levels</em>, a matrix of floating-point values or <code>NA</code> (Not available).</p>
+<div id="NW0-3XkEb5-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S1:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/raw/ampl.tsv"><code>raw/ampl.tsv</code></a></span>
+</div>
+</div>
+<div id="NW0-1QcxIn-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S2:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/raw/mrna.tsv"><code>raw/mrna.tsv</code></a></span>
+</div>
+</div>
+<p>Both files are quite large, as seen in the <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-1JLP7P-1">:listing rawdata.size</a><span style="white-space:nowrap"> </span>⟫</span></span>.</p>
+<p>Here is what Riku had to say about the data:</p>
+<blockquote>
+<p>Copy numbers are measured with Affy 6.0 SNP Arrays. Probes are genotyped, copy-number values are estimated and normalized to 2 with CRLMM. Copy-number data are segmented with the circular binary segmentation (CBS) algorithm using the R package DNAcopy (parameters <code>undo.splits=sdundo</code>, <code>SD=3</code>, <code>alpha=0.01</code>). Copy-number calls (1: amplification, 0: normal, <span class="math inline">−1</span>: deletion) are made similarly to TCGA: in short, by assigning 1 to CNA regions with segment mean <span class="math inline">&gt;2.3</span> and <span class="math inline">−1</span> to regions with segment mean <span class="math inline">&lt;1.7</span>.</p>
+</blockquote>
+<blockquote>
+<p>In the copy-number-call-matrix you have, <code>NA</code> (not available) values occur in genes for which copy-number is normal, unnchanged, or diploid in all samples. In the gene expression matrix, Agilent arrays contain control fields which denote several types of array or scanner errors and quality measures. <code>NA</code>-values in this matrix are therefore a result of the Agilent scanner giving a bad quality flag to a probe which we than convert to <code>NA</code>.</p>
+</blockquote>
+<p>A couple of things to note:</p>
+<ul>
+<li>There are no <span class="math inline">−1</span> values in the “copy number calls” (amplification) matrix, and Riku has told me that I shouldn’t worry about it;</li>
+<li>The <code>NA</code> values in the amplification matrix should be zeroes (no amplification), at least when interpreting them in a biological context (this is handled in <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-qRt64-1">Load the amplification matrix</a><span style="white-space:nowrap"> </span>⟫</span></span>);</li>
+<li>When working with the mRNA (transcript level) matrix, we just remove any <code>NA</code> values – for example, in R, to get the median, use <code>median(mrna, na.rm=TRUE)</code>.</li>
+</ul>
+<p>For both files, the rows are labelled with Ensembl IDs for each gene and the columns are labelled with TCGA barcodes representing patients or samples. The results of the query:</p>
+<div id="NW0-1JLP7P-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 1:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/rawdata.size"><code>rawdata.size</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+21M	raw/ampl.tsv
+187M	raw/mrna.tsv
+207M	total
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Raw data file sizes.</span> <span class="listingcaption">The sizes of each of the raw data files, in a human-readable format. </span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-1" class="defn"><span class="chunknr">C1:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-1">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span><span class="chunkdefs"><br> definition continued in <a href="#NW0-3dMVig-2">↓<span style="white-space:nowrap"> </span>C2</a> + <a href="#NW0-3dMVig-3">⇣<span style="white-space:nowrap"> </span>C15</a> + <a href="#NW0-3dMVig-4">⇣<span style="white-space:nowrap"> </span>C16</a> + <a href="#NW0-3dMVig-5">⇣<span style="white-space:nowrap"> </span>C19</a> + <a href="#NW0-3dMVig-6">⇣<span style="white-space:nowrap"> </span>C22</a> + <a href="#NW0-3dMVig-7">⇣<span style="white-space:nowrap"> </span>C47</a> + <a href="#NW0-3dMVig-8">⇣<span style="white-space:nowrap"> </span>C60</a> + <a href="#NW0-3dMVig-9">⇣<span style="white-space:nowrap"> </span>C61</a> + <a href="#NW0-3dMVig-A">⇣<span style="white-space:nowrap"> </span>C62</a> + <a href="#NW0-3dMVig-B">⇣<span style="white-space:nowrap"> </span>C63</a> + <a href="#NW0-3dMVig-C">⇣<span style="white-space:nowrap"> </span>C64</a> + <a href="#NW0-3dMVig-D">⇣<span style="white-space:nowrap"> </span>C75</a> + <a href="#NW0-3dMVig-E">⇣<span style="white-space:nowrap"> </span>C77</a> + <a href="#NW0-3dMVig-F">⇣<span style="white-space:nowrap"> </span>C82</a> + <a href="#NW0-3dMVig-G">⇣<span style="white-space:nowrap"> </span>C87</a> + <a href="#NW0-3dMVig-H">⇣<span style="white-space:nowrap"> </span>C89</a> + <a href="#NW0-3dMVig-I">⇣<span style="white-space:nowrap"> </span>C90</a> + <a href="#NW0-3dMVig-J">⇣<span style="white-space:nowrap"> </span>C97</a></span></p>
+<pre>
+rawdata.size: raw/ampl.tsv raw/mrna.tsv
+	du --dereference --human-readable --total $^ &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-2">⇩<span style="white-space:nowrap"> </span>C2</a></span>
+</div>
+<p>Since both files are quite big, and saved in a plain text, it is prohibitively expensive to load them. To avoid this, we load them once from R and save the data as a native R object that is both smaller and much faster to load.</p>
+<div id="NW0-1jQrqM-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 2:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/input-data.Rsave.size"><code>input-data.Rsave.size</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+82M	input-data.Rsave
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Size of the native R data object.</span> <span class="listingcaption">Once a tab-separated plain-text data matrix has been loaded and saved as a native R object, it becomes much smaller. </span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-2" class="defn"><span class="chunknr">C2:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-2">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-1">⇧<span style="white-space:nowrap"> </span>C1</a></span></p>
+<pre>
+input-data.Rsave.size: input-data.Rsave
+	du --human-readable $^ &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-3">⇩<span style="white-space:nowrap"> </span>C15</a></span>
+</div>
+<p>To keep the intermediate data object, we declare it as <code>SECONDARY</code> in the Makefile.</p>
+<div class="codechunk">
+<p><span id="NW0-1XH6t8-1" class="defn"><span class="chunknr">C3:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1XH6t8-1">:make The R saved state</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+.SECONDARY: input-data.Rsave
+input-data.Rsave: input-data.R \
+                  ampl.rownames \
+                  ampl.colnames \
+                  ampl.vals \
+                  mrna.rownames \
+                  mrna.colnames \
+                  mrna.vals
+	Rscript --vanilla $^ $@
+
+</pre>
+◼
+</div>
+<p>The script that reads the plain text data matrices and saves them to native R objects. It takes the names of all files as command line arguments.</p>
+<div class="codechunk">
+<p><span id="NW0-4YfEIn-1" class="defn"><span class="chunknr">C4:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4YfEIn-1">input-data.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args &lt;- commandArgs(trailingOnly = TRUE)
+names(args) &lt;- c("ampl.rownames",
+                 "ampl.colnames",
+                 "ampl.vals",
+                 "mrna.rownames",
+                 "mrna.colnames",
+                 "mrna.vals",
+                 "save.file")
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4YfEIn-1-u1" href="#NW0-qRt64-1">Load the amplification matrix</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4YfEIn-1-u2" href="#NW0-8DkwL-1">Load the mRNA matrix</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+save(ampl, mrna, file=args["save.file"])
+</pre>
+◼
+</div>
+<p>Here, the second line makes all <code>NA</code> values 0 (no amplification). The third one makes the amplification a truth value: <code>FALSE</code> for basal level and <code>TRUE</code> for amplification of the gene.</p>
+<div class="codechunk">
+<p><span id="NW0-qRt64-1" class="defn"><span class="chunknr">C5:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-qRt64-1">Load the amplification matrix</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-4YfEIn-1">C4</a></span></p>
+<pre>
+ampl &lt;- scan(file=args["ampl.vals"], what=integer())
+ampl[is.na(ampl)] &lt;- 0
+ampl &lt;- as.logical(ampl)
+ampl.rownames &lt;- scan(file=args["ampl.rownames"], what=character())
+ampl.colnames &lt;- scan(file=args["ampl.colnames"], what=character())
+
+ampl &lt;- matrix(ampl,
+               nrow=length(ampl.rownames), ncol=length(ampl.colnames),
+               dimnames=list(ampl.rownames, ampl.colnames),
+               byrow=TRUE)
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-8DkwL-1" class="defn"><span class="chunknr">C6:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-8DkwL-1">Load the mRNA matrix</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-4YfEIn-1">C4</a></span></p>
+<pre>
+mrna &lt;- scan(file=args["mrna.vals"], what=numeric())
+mrna.rownames &lt;- scan(file=args["mrna.rownames"], what=character())
+mrna.colnames &lt;- scan(file=args["mrna.colnames"], what=character())
+
+mrna &lt;- matrix(mrna,
+               nrow=length(mrna.rownames), ncol=length(mrna.colnames),
+               dimnames=list(mrna.rownames, mrna.colnames),
+               byrow=TRUE)
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-4L6HnU-1" class="defn"><span class="chunknr">C7:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4L6HnU-1">:make Matrix values and row and column labels</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%.vals: get-vals.bash raw/%.tsv
+	bash $^ &gt; $@
+
+%.rownames: get-rownames.bash raw/%.tsv
+	bash $^ &gt; $@
+
+%.colnames: get-colnames.bash raw/%.tsv
+	bash $^ &gt; $@
+
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-2ejRDn-1" class="defn"><span class="chunknr">C8:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2ejRDn-1">get-vals.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+&lt; "$1" <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2ejRDn-1-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2ejRDn-1-u2" href="#NW0-4e0gPP-1">Drop first column</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-tgFL9-1" class="defn"><span class="chunknr">C9:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-tgFL9-1">get-rownames.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+&lt; "$1" <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-tgFL9-1-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-tgFL9-1-u2" href="#NW0-nxmFO-1">Get first column</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-4RVMvH-1" class="defn"><span class="chunknr">C10:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4RVMvH-1">get-colnames.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+&lt; "$1" <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4RVMvH-1-u1" href="#NW0-2NcBeN-1">Get first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4RVMvH-1-u2" href="#NW0-4e0gPP-1">Drop first column</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-AQfF7-1" class="defn"><span class="chunknr">C11:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-2ejRDn-1">C8</a>, <a href="#NW0-tgFL9-1">C9</a>, <a href="#NW0-3dMVig-A">C62</a>, <a href="#NW0-3dMVig-B">C63</a>, <a href="#NW0-2X5fZE-1">C65</a>, <a href="#NW0-3dMVig-H">C89</a></span></p>
+<pre>
+sed -n '2~1p'
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-2NcBeN-1" class="defn"><span class="chunknr">C12:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2NcBeN-1">Get first row</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-4RVMvH-1">C10</a>, <a href="#NW0-3dMVig-8">C60</a>, <a href="#NW0-3dMVig-9">C61</a>, <a href="#NW0-3dMVig-G">C87</a></span></p>
+<pre>
+sed '1q'
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-4e0gPP-1" class="defn"><span class="chunknr">C13:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4e0gPP-1">Drop first column</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-2ejRDn-1">C8</a>, <a href="#NW0-4RVMvH-1">C10</a>, <a href="#NW0-2X5fZE-1">C65</a></span></p>
+<pre>
+cut --complement --fields=1
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-nxmFO-1" class="defn"><span class="chunknr">C14:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-nxmFO-1">Get first column</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-tgFL9-1">C9</a>, <a href="#NW0-3dMVig-3">C15</a></span></p>
+<pre>
+cut --fields=1
+</pre>
+◼
+</div>
+<h2 id="mapping-gene-ids-to-names">Mapping gene IDs to names</h2>
+<p>All genes are identified by their Ensembl IDs. It would be convenient to be able to select genes based on the canonical names of their protein products. To do that, we donwloaded a table that maps Ensembl gene IDs to a short description of the gene and the associated gene name. This was done using the “Customize your download” feature on the <a href="http://www.ensembl.org/downloads.html">Ensembl downloads page</a>, with the following settings:</p>
+<p>Database: “Ensembl Genes 77”;</p>
+<p>Dataset: “Homo sapiens genes (GRCh38)”;</p>
+<p>Filters: “with HGNC ID(s): Only”;</p>
+<p>Attributes: “Ensembl Gene ID”, “Description”, and “Associated Gene Name”.</p>
+<p>The results of the query were downloaded as a tab-separated (TSV) file with a header and saved as:</p>
+<div id="NW0-4LwEza-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S3:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/ensembl/id_descr_name.tsv"><code>ensembl/id_descr_name.tsv</code></a></span>
+</div>
+</div>
+<p>Already we can check if any of the gene IDs in either of the two data matrices is <strong>not</strong> in this list.</p>
+<div id="NW0-yzMJh-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 3:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/mystery-counts"><code>mystery-counts</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+ 1729 mystery-genes-ampl
+ 1815 mystery-genes-mrna
+ 3544 total
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Number of genes without names.</span> <span class="listingcaption">There are quite a few genes without names; about 10% of the total.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-3" class="defn"><span class="chunknr">C15:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-3">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-2">⇧<span style="white-space:nowrap"> </span>C2</a></span></p>
+<pre>
+mystery-counts: mystery-genes-ampl mystery-genes-mrna
+	wc --lines $^ &gt; $@
+
+mystery-genes-%: sorted-genes-% sorted-genes-known
+	comm -2 -3 $^ &gt; $@
+
+sorted-genes-%: %.rownames
+	sort --unique $^ &gt; $@
+
+sorted-genes-known: ensembl/id_descr_name.tsv
+	<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-3-u1" href="#NW0-nxmFO-1">Get first column</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> $&lt; | sort --unique &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-4">⇩<span style="white-space:nowrap"> </span>C16</a></span>
+</div>
+<p>We can already do a sanity check of the data. We will compare two genes that we know should be co-amplified in almost all samples, and correlate very well on the transcript level: <em>ERBB2</em> and <em>STARD3</em>. We would have to find their IDs from the file <code>ensembl/id_descr_name.tsv</code>, and use these IDs to pick out the amplification and mRNA data from the saved R data object <code>input-data.Rsave</code>. This would be an informal validation of all work so far.</p>
+<div id="NW0-2kha6V-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 1:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/sanity-check.svg"><code>sanity-check.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/sanity-check.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Sanity check.</span> <span class="figurecaption">As expected, <em>STARD3</em> and <em>ERBB2</em> are almost always co-amplified and their transcript levels correlate very strongly.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-4" class="defn"><span class="chunknr">C16:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-4">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-3">⇧<span style="white-space:nowrap"> </span>C15</a></span></p>
+<pre>
+sanity-check.ids: sanity-check.bash ensembl/id_descr_name.tsv
+	bash $^ &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-5">⇩<span style="white-space:nowrap"> </span>C19</a></span>
+</div>
+<div class="codechunk">
+<p><span id="NW0-30huvA-1" class="defn"><span class="chunknr">C17:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-30huvA-1">sanity-check.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+awk -v name='^STARD3$' '<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-30huvA-1-u1" href="#NW0-39zbFf-1">ID from name .awk</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>' "$1"
+awk -v name='^ERBB2$' '<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-30huvA-1-u2" href="#NW0-39zbFf-1">ID from name .awk</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>' "$1"
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-39zbFf-1" class="defn"><span class="chunknr">C18:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-39zbFf-1">ID from name .awk</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-30huvA-1">C17</a></span></p>
+<pre>
+BEGIN { FS = "\t"; OFS = "\t" }
+$3 ~ name {
+    print $3, $1
+    exit
+}
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-5" class="defn"><span class="chunknr">C19:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-5">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-4">⇧<span style="white-space:nowrap"> </span>C16</a></span></p>
+<pre>
+sanity-check.svg: sanity-check.R input-data.Rsave sanity-check.ids
+	Rscript --vanilla $^ $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-6">⇩<span style="white-space:nowrap"> </span>C22</a></span>
+</div>
+<div class="codechunk">
+<p><span id="NW0-2pd5bG-1" class="defn"><span class="chunknr">C20:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2pd5bG-1">sanity-check.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("save.file", "ids.file", "fig.file")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2pd5bG-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+ids.table &lt;- read.delim(args["ids.file"], header=F, row.names=1)
+ensembl.id &lt;- as.character(ids.table[,1])
+names(ensembl.id) &lt;- rownames(ids.table)
+
+load(args["save.file"])
+
+ampl[ensembl.id["STARD3"],] -&gt; stard3.ampl
+mrna[ensembl.id["STARD3"],] -&gt; stard3.mrna
+ampl[ensembl.id["ERBB2"],] -&gt; erbb2.ampl
+mrna[ensembl.id["ERBB2"],] -&gt; erbb2.mrna
+
+chisq.test(erbb2.ampl, stard3.ampl) -&gt; chisq.test.result
+
+svg(filename=args["fig.file"], width=7, height=4.7, pointsize=11)
+layout(matrix(c(1,2), nrow=1, ncol=2, byrow=T),
+       widths=c(2,3),
+       heights=c(1,1))
+
+# amplification
+ampl.c &lt;- hcl(c(140,320), l=80)
+barplot(t(chisq.test.result$observed), beside=T, col=ampl.c,
+        xlab="ERBB2 ampl",
+        ylab="number of patients")
+legend("topright",
+       title="STARD3 ampl",
+       legend=c("FALSE", "TRUE"),
+       fill=ampl.c, border=ampl.c,
+       bty="n",
+       cex=.9)
+
+# mRNA
+plot(erbb2.mrna, stard3.mrna,
+     xlab="ERBB2 mRNA level", ylab="STARD3 mRNA level",
+     bty="n")
+
+dev.off() -&gt; foo
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1XetAy-1" class="defn"><span class="chunknr">C21:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-2pd5bG-1">C20</a>, <a href="#NW0-3KcmiV-1">C49</a>, <a href="#NW0-T5WfG-1">C52</a>, <a href="#NW0-18leZM-1">C76</a>, <a href="#NW0-jO6tT-1">C78</a>, <a href="#NW0-1iwS92-1">C83</a>, <a href="#NW0-1tlbOt-1">C94</a>, <a href="#NW0-3g7ckd-1">C98</a>, <a href="#NW0-10Gl3O-1">C100</a></span></p>
+<pre>
+args &lt;- commandArgs(trailingOnly=T)
+names(args) &lt;- args.names
+</pre>
+◼
+</div>
+<h2 id="meta-data-tcga-ensembl">Meta data: TCGA, Ensembl</h2>
+<p>We will use a relational database to keep and query the TCGA meta data.</p>
+<div id="NW0-4CCQm0-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 4:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/tcga.db.schema"><code>tcga.db.schema</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+CREATE TABLE patient_survival (
+  "Barcode" TEXT,
+  "Event" TEXT,
+  "Days" INTEGER
+);
+CREATE TABLE mirna (
+  mirna TEXT,
+  gene TEXT,
+  refseqid TEXT,
+  sum INTEGER
+);
+CREATE TABLE ampl_rownames(
+  "Ensembl Gene ID" TEXT
+);
+CREATE TABLE mrna_rownames(
+  "Ensembl Gene ID" TEXT
+);
+CREATE TABLE portion_analyte(
+  "Code" TEXT,
+  "Definition" TEXT
+);
+CREATE TABLE sample_type(
+  "Code" TEXT,
+  "Definition" TEXT,
+  "Short Letter Code" TEXT
+);
+CREATE TABLE tissue_source_site(
+  "TSS Code" TEXT,
+  "Source Site" TEXT,
+  "Study Name" TEXT,
+  "BCR" TEXT
+);
+CREATE TABLE id_descr_name(
+  "Ensembl Gene ID" TEXT,
+  "Description" TEXT,
+  "Associated Gene Name" TEXT
+);
+CREATE TABLE ampl_cols(
+  "Barcode" TEXT,
+  "TSS Code" TEXT,
+  "Patient" TEXT
+);
+CREATE TABLE mrna_cols(
+  "Barcode" TEXT,
+  "TSS Code" TEXT,
+  "Patient" TEXT,
+  "Sample" TEXT,
+  "Vial" TEXT,
+  "Portion" TEXT,
+  "Analyte" TEXT
+);
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">The complete schema so far.</span>
+</div>
+</div>
+</div>
+<p>This is the complete schema for the database, generated automatically from the database file.</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-6" class="defn"><span class="chunknr">C22:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-6">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-5">⇧<span style="white-space:nowrap"> </span>C19</a></span></p>
+<pre>
+tcga.db.schema: tcga.db
+	echo '.schema' | sqlite3 $&lt; &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-7">⇩<span style="white-space:nowrap"> </span>C47</a></span>
+</div>
+<p>To insert tables in to the database, we directly import tab-separated files with headers to a table named as the file, with the <code>.tsv</code> extension stripped. This uses a useful command of the <a href="https://www.sqlite.org/cli.html">SQLite shell</a>, <code>.import</code>. When the table with that name has not been defined yet, the header line in the imported file is used.</p>
+<div class="codechunk">
+<p><span id="NW0-4UA2Lb-1" class="defn"><span class="chunknr">C23:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4UA2Lb-1">create-table.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+NAME=$(basename --suffix=.tsv "$1")
+echo 'DROP TABLE IF EXISTS "'"$NAME"'";'
+echo '.separator "\t"'
+echo ".import '$1' $NAME"
+</pre>
+◼
+</div>
+<p>This defines an implicit rule that generates the SQL code for inserting a table, using <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-4UA2Lb-1">create-table.bash</a><span style="white-space:nowrap"> </span>⟫</span></span> defined above, if the appropriate <code>.tsv</code> file exists.</p>
+<div class="codechunk">
+<p><span id="NW0-4fEL6F-1" class="defn"><span class="chunknr">C24:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4fEL6F-1">:make Implicit rule for SQL tables from files with headers</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%.create-table.sql: create-table.bash %.tsv
+	bash $^ &gt; $@
+
+</pre>
+◼
+</div>
+<p>This is the rule that builds and updates the database. Note that only changes will be applied to the database.</p>
+<div class="codechunk">
+<p><span id="NW0-2JJXVy-1" class="defn"><span class="chunknr">C25:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2JJXVy-1">:make Populate the relational database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+tcga.db:
+	cat $? | sqlite3 $@
+
+</pre>
+◼
+</div>
+<p>In the amplification data matrix, column labels denote patients. In the transcript level matrix, column labels denote samples. Both patients and samples are labeled by a <a href="https://wiki.nci.nih.gov/display/TCGA/TCGA+barcode">TCGA barcode</a>. Those barcodes contain meta-information: for example, using the barcode, we can separate solid tumor samples from healthy tissue control samples in the transcript level data matrix.</p>
+<p>The different identifiers within a barcode are described in “code table reports” <a href="https://tcga-data.nci.nih.gov/datareports/codeTablesReport.htm">available for download</a>. The following three code table reports are relevant for us:</p>
+<div id="NW0-17C2qo-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S4:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/tcga/portion_analyte.tsv"><code>tcga/portion_analyte.tsv</code></a></span>
+</div>
+</div>
+<div id="NW0-xBIxd-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S5:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/tcga/sample_type.tsv"><code>tcga/sample_type.tsv</code></a></span>
+</div>
+</div>
+<div id="NW0-1Q5zvj-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S6:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/tcga/tissue_source_site.tsv"><code>tcga/tissue_source_site.tsv</code></a></span>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-62H0K-1" class="defn"><span class="chunknr">C26:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-62H0K-1">:make Code table reports to the database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+tcgatables := $(patsubst %.tsv,%.create-table.sql,$(wildcard tcga/*.tsv))
+tcga.db: $(tcgatables)
+</pre>
+◼
+</div>
+<p>Which are the “tumor” samples?</p>
+<div class="codechunk">
+<p><span id="NW0-2514sy-1" class="defn"><span class="chunknr">C27:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2514sy-1">tumors.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT * FROM sample_type
+WHERE "Definition" LIKE '%tumor%';
+</pre>
+◼
+</div>
+<div id="NW0-2owIYO-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 1:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/tumors.sql-result"><code>tumors.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+Code
+</TH>
+<TH>
+Definition
+</TH>
+<TH>
+Short Letter Code
+</TH>
+</TR>
+<TR>
+<TD>
+01
+</TD>
+<TD>
+Primary solid Tumor
+</TD>
+<TD>
+TP
+</TD>
+</TR>
+<TR>
+<TD>
+02
+</TD>
+<TD>
+Recurrent Solid Tumor
+</TD>
+<TD>
+TR
+</TD>
+</TR>
+<TR>
+<TD>
+08
+</TD>
+<TD>
+Human Tumor Original Cells
+</TD>
+<TD>
+THOC
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Tumor sample types.</span> <span class="tablecaption">We are most interested in the type “Primary solid Tumor”.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3unQa8-1" class="defn"><span class="chunknr">C28:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3unQa8-1">:make Run a query on the relational database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%.sql-result: tcga.db sql-result.bash %.query.sql
+	bash sql-result.bash $*.query.sql \
+	    | sqlite3 tcga.db \
+	    &gt; $@
+
+</pre>
+◼
+</div>
+<p>A script that runs a query so that the results are returned as an HTML table with headers.</p>
+<div class="codechunk">
+<p><span id="NW0-42QLzh-1" class="defn"><span class="chunknr">C29:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-42QLzh-1">sql-result.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+echo '.mode html'
+echo '.headers on'
+cat "$1"
+</pre>
+◼
+</div>
+<p>All that is left is to link the barcodes used in the two data matrices to these tables. To do that, we use two tables that have the complete barcode as a unique identifier, and the fields of the barcode as the rest of the columns.</p>
+<p>The amplification matrix uses “Patient” barcodes as column labels.</p>
+<div class="codechunk">
+<p><span id="NW0-FNdKc-1" class="defn"><span class="chunknr">C30:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-FNdKc-1">ampl.colnames.awk</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+BEGIN {
+    FS = "-"; OFS = "\t"
+    print "Barcode", "TSS Code", "Patient"
+}
+{ print $0, $2, $3 }
+</pre>
+◼
+</div>
+<p>The transcript level matrix uses “Analyte” barcodes as column labels.</p>
+<div class="codechunk">
+<p><span id="NW0-2KjWoF-1" class="defn"><span class="chunknr">C31:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2KjWoF-1">mrna.colnames.awk</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+BEGIN {
+    FS = "-"; OFS = "\t"
+    print "Barcode", "TSS Code", "Patient",
+          "Sample", "Vial", "Portion", "Analyte"
+}
+{
+    sample_type = substr($4, 1, 2);
+    vial = substr($4, 3, 1);
+    portion = substr($5, 1, 2);
+    analyte = substr($5, 3, 1);
+    print $0, $2, $3,
+          sample_type, vial, portion, analyte;
+}
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-4ga0P4-1" class="defn"><span class="chunknr">C32:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4ga0P4-1">:make Matrix column labels to files</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%_cols.tsv: %.colnames %.colnames.awk
+	&lt; $*.colnames <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4ga0P4-1-u1" href="#NW0-3yc2Bl-1">Tab-separated fields to lines</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>  \
+	    | awk -f $*.colnames.awk \
+	    &gt; $@
+
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3yc2Bl-1" class="defn"><span class="chunknr">C33:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3yc2Bl-1">Tab-separated fields to lines</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-4ga0P4-1">C32</a>, <a href="#NW0-3dMVig-9">C61</a>, <a href="#NW0-2X5fZE-1">C65</a>, <a href="#NW0-3dMVig-G">C87</a></span></p>
+<pre>
+tr "\t" "\n"
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-2USwt3-1" class="defn"><span class="chunknr">C34:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2USwt3-1">:make Matrix column label files to the database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+tcga.db: ampl_cols.create-table.sql mrna_cols.create-table.sql
+</pre>
+◼
+</div>
+<p>What kinds of samples are there in the transcript level matrix?</p>
+<div class="codechunk">
+<p><span id="NW0-4fDO9e-1" class="defn"><span class="chunknr">C35:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4fDO9e-1">samples.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT
+  count("Sample") as n,
+  "Definition"
+FROM mrna_cols
+  INNER JOIN sample_type
+    ON mrna_cols."Sample" = sample_type."Code"
+GROUP BY "Definition"
+ORDER BY n DESC;
+</pre>
+◼
+</div>
+<div id="NW0-2xpaKm-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 2:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/samples.sql-result"><code>samples.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+n
+</TH>
+<TH>
+Definition
+</TH>
+</TR>
+<TR>
+<TD>
+524
+</TD>
+<TD>
+Primary solid Tumor
+</TD>
+</TR>
+<TR>
+<TD>
+59
+</TD>
+<TD>
+Solid Tissue Normal
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Sample types in transcript levels matrix.</span> <span class="tablecaption">Most of the samples are from tumors, but some have associated normal tissue controls.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-4UirPu-1" class="defn"><span class="chunknr">C36:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4UirPu-1">patients-in-mrna.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT count(*) as "Number of patients" FROM (
+  SELECT DISTINCT "TSS Code", "Patient"
+  FROM mrna_cols
+);
+</pre>
+◼
+</div>
+<div id="NW0-NfOyu-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 3:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/patients-in-mrna.sql-result"><code>patients-in-mrna.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+Number of patients
+</TH>
+</TR>
+<TR>
+<TD>
+526
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Number of unique patients.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-rgTeo-1" class="defn"><span class="chunknr">C37:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-rgTeo-1">patients-with-control.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT count(*) AS n FROM (
+  SELECT x."TSS Code", x."Patient"
+  FROM mrna_cols AS x
+    INNER JOIN mrna_cols AS y
+      ON x."TSS Code" = y."TSS Code"
+        AND x."Patient" = y."Patient"
+        AND x."Sample" &lt; y."Sample"
+);
+</pre>
+◼
+</div>
+<div id="NW0-1kYoay-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 4:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/patients-with-control.sql-result"><code>patients-with-control.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+n
+</TH>
+</TR>
+<TR>
+<TD>
+57
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Number of patients with control sample.</span> <span class="tablecaption">This counts all patients that have both tumor and normal solid tissue sample in the transcript level matrix.</span>
+</div>
+</div>
+</div>
+<p>How many are the patients from the amplification matrix for which we have tumor samples in the transcript level matrix?</p>
+<div class="codechunk">
+<p><span id="NW0-4bcXez-1" class="defn"><span class="chunknr">C38:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4bcXez-1">patients-tumors.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT count(*) AS 'Cancer patient count'
+FROM ( <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-4bcXez-1-u1" href="#NW0-3SH6bU-1">ampl-mrna.fragment.sql</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> );
+</pre>
+◼
+</div>
+<p>This SQL query fragment creates a with two columns. In the <code>ampl</code> column will be the patient barcodes, and in the <code>mrna</code> column the solid tumor sample barcodes of the same patients.</p>
+<div class="codechunk">
+<p><span id="NW0-3SH6bU-1" class="defn"><span class="chunknr">C39:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3SH6bU-1">ampl-mrna.fragment.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-4bcXez-1">C38</a>, <a href="#NW0-32ZcIC-1">C48</a>, <a href="#NW0-44RK6Q-1">C72</a>, <a href="#NW0-2pGpLn-1">C73</a></span></p>
+<pre>
+SELECT
+  ampl_cols."Barcode" AS ampl,
+  mrna_cols."Barcode" AS mrna
+FROM ampl_cols
+  INNER JOIN mrna_cols
+    USING ("TSS Code", "Patient")
+  INNER JOIN sample_type
+    ON mrna_cols."Sample" = sample_type."Code"
+WHERE sample_type."Definition" = 'Primary solid Tumor'
+</pre>
+◼
+</div>
+<div id="NW0-lY91r-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 5:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/patients-tumors.sql-result"><code>patients-tumors.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+Cancer patient count
+</TH>
+</TR>
+<TR>
+<TD>
+516
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Useful number of patients.</span> <span class="tablecaption">These are the patients that have an amplification status, and a transcript level from a solid tumor sample.</span>
+</div>
+</div>
+</div>
+<p>Finally, for convenience, we add the Ensembl ID to Gene name mapping downloaded from Ensembl to the database, too. Even though we are able to query this file with the help of Awk and Bash, as demonstrated by <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-30huvA-1">sanity-check.bash</a><span style="white-space:nowrap"> </span>⟫</span></span> and <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-39zbFf-1">ID from name .awk</a><span style="white-space:nowrap"> </span>⟫</span></span>, it is unnecessarily hacky.</p>
+<div class="codechunk">
+<p><span id="NW0-VuaIN-1" class="defn"><span class="chunknr">C40:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-VuaIN-1">:make Ensembl IDs and names to the database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+tcga.db: ensembl/id_descr_name.create-table.sql
+</pre>
+◼
+</div>
+<p>Now, to get the Ensembl IDs of genes, it is enough to say:</p>
+<div class="codechunk">
+<p><span id="NW0-36EPwI-1" class="defn"><span class="chunknr">C41:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-36EPwI-1">erbb2-stard3-ids.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT
+  "Associated Gene Name",
+  "Ensembl Gene ID"
+FROM id_descr_name
+WHERE "Associated Gene Name" IN ( 'ERBB2', 'STARD3' );
+</pre>
+◼
+</div>
+<div id="NW0-BVyOz-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 6:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/erbb2-stard3-ids.sql-result"><code>erbb2-stard3-ids.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+Associated Gene Name
+</TH>
+<TH>
+Ensembl Gene ID
+</TH>
+</TR>
+<TR>
+<TD>
+STARD3
+</TD>
+<TD>
+ENSG00000131748
+</TD>
+</TR>
+<TR>
+<TD>
+ERBB2
+</TD>
+<TD>
+ENSG00000141736
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Ensembl IDs of <em>ERBB2</em> and <em>STARD3</em>.</span>
+</div>
+</div>
+</div>
+<p>Note that the queries above double as an informal validation for the database.</p>
+<h1 id="gene-association">Gene association</h1>
+<p>We will try to find a correlation of the amplification status or the transcript levels between pairs of this set of genes:</p>
+<div class="codechunk">
+<p><span id="NW0-6Htgi-1" class="defn"><span class="chunknr">C42:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-6Htgi-1">Genes of interest</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-3RmdvH-1">C43</a>, <a href="#NW0-3hGGu-1">C44</a></span></p>
+<pre>
+"STARD3", "ERBB2", "NDRG1", "LAPTM4B", "LAPTM4A"
+</pre>
+◼
+</div>
+<h2 id="pairs-of-genes">Pairs of genes</h2>
+<p>To generate the pairs of genes, we could say:</p>
+<div class="codechunk">
+<p><span id="NW0-3RmdvH-1" class="defn"><span class="chunknr">C43:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3RmdvH-1">:dummy Generate pairs</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+list = { <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3RmdvH-1-u1" href="#NW0-6Htgi-1">Genes of interest</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> };
+for (i = 0; i &lt; length(list); ++i)
+    for (j = i+1; j &lt; length(list); ++j)
+        compare(list[i], list[j]);
+</pre>
+◼
+</div>
+<p>However, we can achieve the same, and more, with SQL:</p>
+<div class="codechunk">
+<p><span id="NW0-3hGGu-1" class="defn"><span class="chunknr">C44:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3hGGu-1">genes-of-interest-pairs.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT DISTINCT
+  x."Associated Gene Name" AS name1,
+  y."Associated Gene Name" AS name2,
+  x."Ensembl Gene ID" AS id1,
+  y."Ensembl Gene ID" AS id2
+FROM id_descr_name AS x, id_descr_name AS y
+WHERE name1 IN ( <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3hGGu-1-u1" href="#NW0-6Htgi-1">Genes of interest</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> )
+  AND name2 IN ( <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3hGGu-1-u2" href="#NW0-6Htgi-1">Genes of interest</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> )
+  AND name1 &lt; name2
+ORDER BY name1;
+</pre>
+◼
+</div>
+<p>This implicit rule keeps the headers, so the resulting <code>*.tsv-result</code> file can be loaded from R using <code>read.delim</code> with the default parameters.</p>
+<div class="codechunk">
+<p><span id="NW0-FuaXO-1" class="defn"><span class="chunknr">C45:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-FuaXO-1">:make Results of a query to a file</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%.tsv-result: tcga.db sql-tsv.bash %.query.sql
+	bash sql-tsv.bash $*.query.sql \
+	    | sqlite3 tcga.db \
+	    &gt; $@
+
+</pre>
+◼
+</div>
+<p>This is the bash script that sets the mode and turns on the headers.</p>
+<div class="codechunk">
+<p><span id="NW0-4MvL1a-1" class="defn"><span class="chunknr">C46:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4MvL1a-1">sql-tsv.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+echo '.mode tabs'
+echo '.headers on'
+cat "$1"
+</pre>
+◼
+</div>
+<h2 id="association-results">Association results</h2>
+<p>Now, using this, we can read this file from R and use it to extract the relevant genes (rows) from the amplification status and transcript level matrices.</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-7" class="defn"><span class="chunknr">C47:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-7">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-6">⇧<span style="white-space:nowrap"> </span>C22</a></span></p>
+<pre>
+genes-of-interest.Rsave: genes-of-interest.R \
+                         genes-of-interest-pairs.tsv-result \
+                         columns-of-interest.tsv-result \
+                         input-data.Rsave
+	Rscript --vanilla $^ $@
+
+fig.genes-of-interest.%: plot-genes-of-interest.R \
+                         genes-of-interest.Rsave
+	Rscript --vanilla $^ $@ $*
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-8">⇩<span style="white-space:nowrap"> </span>C60</a></span>
+</div>
+<div class="codechunk">
+<p><span id="NW0-32ZcIC-1" class="defn"><span class="chunknr">C48:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-32ZcIC-1">columns-of-interest.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-32ZcIC-1-u1" href="#NW0-3SH6bU-1">ampl-mrna.fragment.sql</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>;
+</pre>
+◼
+</div>
+<p>To summarize some of the useful information in this subset of the data, we perform a <span class="math inline"><em>χ</em><sup>2</sup></span> test on the amplification status from both genes, and a Pearson’s correlation test on the transcript levels from both genes.</p>
+<div class="codechunk">
+<p><span id="NW0-3KcmiV-1" class="defn"><span class="chunknr">C49:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3KcmiV-1">genes-of-interest.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("from.file", "cols.file", "save.file", "result.file")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3KcmiV-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3KcmiV-1-u2" href="#NW0-1cwsDZ-1">Load genes of interest data from files</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3KcmiV-1-u3" href="#NW0-1e0u0j-1">Keep only the overlapping columns</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+correlation &lt;- function(x) {
+    n1 &lt;- x[1]
+    n2 &lt;- x[2]
+    a1 &lt;- ampl[x[3],]
+    a2 &lt;- ampl[x[4],]
+    t1 &lt;- mrna[x[3],]
+    t2 &lt;- mrna[x[4],]
+
+    chisq.test(a1, a2) -&gt; chisq.r
+
+    <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3KcmiV-1-u4" href="#NW0-4JbOhF-1">Color mRNA scatter plot R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+    scatter.plot.col(a1, a2) -&gt; mrna.colors
+    cor.test(t1, t2, method="pearson") -&gt; cor.r
+
+    list(name.a=n1, name.b=n2,
+         chisq.result=chisq.r,
+         transcript.a=t1, transcript.b=t2,
+         mrna.col=mrna.colors,
+         pearson.estimate=cor.r$estimate)
+}
+
+apply(pairs, 1, correlation) -&gt; result
+save(result, file=args["result.file"])
+</pre>
+◼
+</div>
+<div id="NW0-is06P-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 1:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/fig.genes-of-interest.pdf"><code>fig.genes-of-interest.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-3uiVfN-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 2:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/fig.genes-of-interest.svg"><code>fig.genes-of-interest.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/fig.genes-of-interest.svg">
+</div>
+<div class="figuremeta">
+<p><span class="figuretitle">The results for all possible pairs.</span> <span class="figurecaption">The first two plots, a positive control. <em>STARD3</em> and <em>ERBB2</em> are on the same amplicon and are known to be co-amplified and co-overexpressed in breast canser patient samples.</p>
+<p>There is no correlation between <em>NRDG1</em> and <em>STARD3</em>. They are not co-amplified and the transcript levels do not correlate.</p>
+<p><em>LAPTM4B</em> and <em>STARD3</em> are not co-amplified. On the transcript level however there is a moderate positive correlation between the two.</p>
+<em>LAPTM4B</em> is co-amplified with <em>NDRG1</em>. This is reflected in the correlation of the transcript levels of the two genes. </span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-1cwsDZ-1" class="defn"><span class="chunknr">C50:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1cwsDZ-1">Load genes of interest data from files</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-3KcmiV-1">C49</a></span></p>
+<pre>
+as.matrix(read.delim(args["from.file"])) -&gt; pairs
+as.matrix(read.delim(args["cols.file"])) -&gt; cols
+load(args["save.file"])
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1e0u0j-1" class="defn"><span class="chunknr">C51:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1e0u0j-1">Keep only the overlapping columns</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-3KcmiV-1">C49</a>, <a href="#NW0-1tlbOt-1">C94</a></span></p>
+<pre>
+ampl &lt;- ampl[,cols[,"ampl"]]
+mrna &lt;- mrna[,cols[,"mrna"]]
+</pre>
+◼
+</div>
+<h2 id="plotting-the-results">Plotting the results</h2>
+<p>The names are used to label the axes. The transcript levels are used for the scatter plot. The generated colors for the scatter plot were generated above. This uses the list of values to draw summary plots.</p>
+<div class="codechunk">
+<p><span id="NW0-T5WfG-1" class="defn"><span class="chunknr">C52:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-T5WfG-1">plot-genes-of-interest.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("result.file", "fig.file", "format")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-T5WfG-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+load(args["result.file"])
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-T5WfG-1-u2" href="#NW0-3vTkTt-1">Open graphics device R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+r &lt;- length(result)
+open.device(args["format"], 
+            args["fig.file"],
+            width=5.6, height=r*3.8,
+            pointsize=14)
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-T5WfG-1-u3" href="#NW0-1t8KJT-1">Define layout for correlation plots R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+cor.plots.layout(r)
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-T5WfG-1-u4" href="#NW0-1zRKUP-1">Draw correlation plots R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+lapply(result, draw.cor.plots) -&gt; foo
+
+dev.off() -&gt; foo
+</pre>
+◼
+</div>
+<p>Unfortunately, I could not figure out an easy way to choose the graphics device at run-time. Instead, I am using this hack to open the correct device based on a character argument:</p>
+<div class="codechunk">
+<p><span id="NW0-3vTkTt-1" class="defn"><span class="chunknr">C53:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3vTkTt-1">Open graphics device R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-T5WfG-1">C52</a>, <a href="#NW0-jO6tT-1">C78</a>, <a href="#NW0-1iwS92-1">C83</a>, <a href="#NW0-10Gl3O-1">C100</a></span></p>
+<pre>
+open.device &lt;- function(format, ...) {
+    if (format == "pdf") {
+        pdf(...)
+    } else if (format == "svg") {
+        svg(...)
+    }
+}
+</pre>
+◼
+</div>
+<p>This defines a layout with as many rows as items in the <code>result</code> variable, and splits each row in two columns.</p>
+<div class="codechunk">
+<p><span id="NW0-1t8KJT-1" class="defn"><span class="chunknr">C54:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1t8KJT-1">Define layout for correlation plots R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-T5WfG-1">C52</a>, <a href="#NW0-10Gl3O-1">C100</a></span></p>
+<pre>
+cor.plots.layout &lt;- function(r) {
+    layout(matrix(1:(2*r), nrow=r, ncol=2, byrow=T),
+           widths=c(4,7),
+           heights=rep(1, r))
+}
+</pre>
+◼
+</div>
+<p>When below a limit, display numerical value differently.</p>
+<div class="codechunk">
+<p><span id="NW0-43GYHg-1" class="defn"><span class="chunknr">C55:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-43GYHg-1">Generate a subtitle</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1zRKUP-1">C56</a></span></p>
+<pre>
+make.subtitle.str &lt;- function(str, limit, prec, x) {
+    if (x &lt; limit) {
+        subtitle.str &lt;- paste(str, "&lt;", limit)
+    } else {
+        subtitle.str &lt;- paste(str, "=", round(x, prec))
+    }
+}
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1zRKUP-1" class="defn"><span class="chunknr">C56:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1zRKUP-1">Draw correlation plots R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-T5WfG-1">C52</a>, <a href="#NW0-10Gl3O-1">C100</a></span></p>
+<pre>
+draw.cor.plots &lt;- function(x) {
+    <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1zRKUP-1-u1" href="#NW0-43GYHg-1">Generate a subtitle</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+    ampl.col &lt;- hcl(c(150,330), l=67)
+    <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1zRKUP-1-u2" href="#NW0-2ZXUiI-1">Draw a barplot to visualize amplification status correlation</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+    <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1zRKUP-1-u3" href="#NW0-1gw7OI-1">Draw a scatter plot to visualize transcript level correlation</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+}
+</pre>
+◼
+</div>
+<p>This uses the observed <span class="math inline">2 × 2</span> contingency table from the <span class="math inline"><em>χ</em><sup>2</sup></span> test to plot each value as a bar height.</p>
+<div class="codechunk">
+<p><span id="NW0-2ZXUiI-1" class="defn"><span class="chunknr">C57:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2ZXUiI-1">Draw a barplot to visualize amplification status correlation</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1zRKUP-1">C56</a></span></p>
+<pre>
+subtitle.str &lt;- make.subtitle.str("p-val", 0.005, 3, x$chisq.result$p.value)
+cont.table &lt;- t(x$chisq.result$observed)
+foo &lt;- c("basal", "amplified")
+dimnames(cont.table) &lt;- list(foo, foo)
+
+barplot(cont.table, beside=T,
+        col=ampl.col,
+        main="Amplification",
+        sub=subtitle.str,
+        xlab=paste(x$name.a),
+        ylab="number of patients")
+
+legend("topright",
+       title=paste(x$name.b),
+       legend=foo,
+       fill=ampl.col, border=ampl.col,
+       bty="n")
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1gw7OI-1" class="defn"><span class="chunknr">C58:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1gw7OI-1">Draw a scatter plot to visualize transcript level correlation</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1zRKUP-1">C56</a></span></p>
+<pre>
+subtitle.str &lt;- make.subtitle.str("cor", 0.1, 2, x$pearson.estimate)
+plot(x$transcript.a, x$transcript.b,
+     col=x$mrna.col,
+     main=paste("Transcipt levels"),
+     sub=subtitle.str,
+     xlab=x$name.a, ylab=x$name.b,
+     bty="n")
+
+legend("topleft",
+    title = "Amplification",
+    legend = c("amplified", "basal", "different"),
+    pch = c(1, 1, 1),
+    col=c("darkred", "darkblue", "olivedrab"),
+    bty = "n")
+</pre>
+◼
+</div>
+<p>In addition to using the actual transcript levels from the two patients, it also uses the amplification status for each patient to draw the circle in blue (both negative), red (both positive), or green (different). This implementation works because the amplification statuses of both genes are represented as logical vectors, and we know that all <code>NA</code>’s have been substituted with <code>FALSE</code>. When used in ordinary arithmetic, <a href="https://cran.r-project.org/doc/manuals/r-release/R-intro.html#Logical-vectors">logical vectors are coerced into numeric vectors</a>, with <code>FALSE = 0</code> and <code>TRUE = 1</code>.</p>
+<div class="codechunk">
+<p><span id="NW0-4JbOhF-1" class="defn"><span class="chunknr">C59:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4JbOhF-1">Color mRNA scatter plot R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-3KcmiV-1">C49</a>, <a href="#NW0-10Gl3O-1">C100</a></span></p>
+<pre>
+scatter.plot.col &lt;- function(a1, a2) {
+    c("darkblue", "olivedrab", "darkred")[1+a1+a2]
+}
+</pre>
+◼
+</div>
+<h1 id="survival">Survival</h1>
+<p>The next question is whether there is a correlation between gene amplification and transcription levels and patient survival.</p>
+<h2 id="clinical-patient-data">Clinical patient data</h2>
+<p>The data on patient survival is extracted from a table with many cliniclal parameters.</p>
+<div id="NW0-mTEQ-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S7:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/clinical/clinical_patient_all_brca.txt"><code>clinical/clinical_patient_all_brca.txt</code></a></span>
+</div>
+</div>
+<div id="NW0-3nK1Yr-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 5:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/clinical-column-number"><code>clinical-column-number</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+102
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Number of columns.</span> <span class="listingcaption">Each column in this matrix is one clinical parameter of that patient. The majority are not interesting at this stage. </span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-8" class="defn"><span class="chunknr">C60:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-8">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-7">⇧<span style="white-space:nowrap"> </span>C47</a></span></p>
+<pre>
+clinical-column-number: clinical/clinical_patient_all_brca.txt
+	&lt; $&lt; <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-8-u1" href="#NW0-2NcBeN-1">Get first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> | wc --words &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-9">⇩<span style="white-space:nowrap"> </span>C61</a></span>
+</div>
+<p>Which could be the relevant rows? Time is likely to be measured in days or months.</p>
+<div id="NW0-3Ci1YJ-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 6:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/clinical-relevant-columns"><code>clinical-relevant-columns</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+24:days_to_birth
+25:days_to_death
+26:days_to_initial_pathologic_diagnosis
+27:days_to_last_followup
+28:days_to_last_known_alive
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Columns that could be relevant.</span> <span class="listingcaption">We need the days to death (25), and last followup (27) or last known alivem (28), whichever is longer.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-9" class="defn"><span class="chunknr">C61:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-9">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-8">⇧<span style="white-space:nowrap"> </span>C60</a></span></p>
+<pre>
+clinical-relevant-columns: clinical/clinical_patient_all_brca.txt
+	&lt; $&lt; <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-9-u1" href="#NW0-2NcBeN-1">Get first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> \
+	    | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-9-u2" href="#NW0-3yc2Bl-1">Tab-separated fields to lines</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> \
+	    | grep --line-number 'days\|months' \
+	    &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-A">⇩<span style="white-space:nowrap"> </span>C62</a></span>
+</div>
+<p>Extract the relevant columns only: Patient barcode (1), and days to death (25), to last followup (27), and to last known alive (28).</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-A" class="defn"><span class="chunknr">C62:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-A">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-9">⇧<span style="white-space:nowrap"> </span>C61</a></span></p>
+<pre>
+patient-days: clinical/clinical_patient_all_brca.txt
+	&lt; $^ <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-A-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> | cut --fields=1,25,27,28 &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-B">⇩<span style="white-space:nowrap"> </span>C63</a></span>
+</div>
+<p>Note that column 26, “Days to initial pathologic diagnosis”, has a value of 0 for every one of the 863 patients:</p>
+<div id="NW0-15fw0g-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 7:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/days-to-initial"><code>days-to-initial</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+    863 0
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">A useless column.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-B" class="defn"><span class="chunknr">C63:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-B">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-A">⇧<span style="white-space:nowrap"> </span>C62</a></span></p>
+<pre>
+days-to-initial: clinical/clinical_patient_all_brca.txt
+	<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-B-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> $&lt; | cut --fields=26 | sort | uniq -c &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-C">⇩<span style="white-space:nowrap"> </span>C64</a></span>
+</div>
+<p>Are there field values that are <em>not</em> numbers? Which are they? How many of each?</p>
+<div id="NW0-1gXZsL-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 8:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/patient-days-nans"><code>patient-days-nans</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+   1706 [Not Available]
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Field values that are not numbers.</span> <span class="listingcaption">There is only one value that is not a number: the string “[Not Available]”. </span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-C" class="defn"><span class="chunknr">C64:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-C">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-B">⇧<span style="white-space:nowrap"> </span>C63</a></span></p>
+<pre>
+patient-days-nans: nan-fields.sh patient-days
+	bash $^ &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-D">⇩<span style="white-space:nowrap"> </span>C75</a></span>
+</div>
+<div class="codechunk">
+<p><span id="NW0-2X5fZE-1" class="defn"><span class="chunknr">C65:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2X5fZE-1">nan-fields.sh</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2X5fZE-1-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> "$1" \
+    | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2X5fZE-1-u2" href="#NW0-4e0gPP-1">Drop first column</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> \
+    | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2X5fZE-1-u3" href="#NW0-3yc2Bl-1">Tab-separated fields to lines</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> \
+    | sed -n '/^[0-9.]\+$/!p' \
+    | sort \
+    | uniq --count
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-4gPs4X-1" class="defn"><span class="chunknr">C66:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4gPs4X-1">:make Normalized patient survival file</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+patient_survival.rows-tsv: patient_survival.awk patient-days
+	awk -f $^ &gt; $@
+
+</pre>
+◼
+</div>
+<p>To prepare this table for the database, we normalize it first. This means that there will be one record in the database for each Patient-Value combination. All “[Not Available]” values will be skipped.</p>
+<div class="codechunk">
+<p><span id="NW0-2HFBF9-1" class="defn"><span class="chunknr">C67:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2HFBF9-1">patient_survival.awk</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+BEGIN {
+    FS = "\t" ; OFS = "\t"
+    col[2] = "Death"
+    col[3] = "Last followup"
+    col[4] = "Last known alive"
+}
+{
+    for (i = 2; i &lt;= 4; ++i) {
+        if ($i != "[Not Available]") {
+            print $1, col[i], $i
+        }
+    }
+}
+</pre>
+◼
+</div>
+<p>The normalized table is inserted to the relational database.</p>
+<div class="codechunk">
+<p><span id="NW0-SRj4I-1" class="defn"><span class="chunknr">C68:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-SRj4I-1">:make Patient survival to the database</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+tcga.db: patient_survival.define-insert-table.sql
+
+</pre>
+◼
+</div>
+<p>Because the last column in the database is a number, it is better to manually define the schema for the table that is going to hold this data.</p>
+<div class="codechunk">
+<p><span id="NW0-49jHF9-1" class="defn"><span class="chunknr">C69:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-49jHF9-1">patient_survival.schema.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+CREATE TABLE patient_survival (
+  "Barcode" TEXT,
+  "Event" TEXT,
+  "Days" INTEGER
+);
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3cJcvi-1" class="defn"><span class="chunknr">C70:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3cJcvi-1">:make Implicit rule for SQL tables with an explicit schema</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%.define-insert-table.sql: define-insert-table.bash %.schema.sql %.rows-tsv
+	bash $^ &gt; $@
+
+</pre>
+◼
+</div>
+<p>In addition to <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-4UA2Lb-1">create-table.bash</a><span style="white-space:nowrap"> </span>⟫</span></span>, this script takes an explicitly defined schema.</p>
+<div class="codechunk">
+<p><span id="NW0-29nYfO-1" class="defn"><span class="chunknr">C71:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-29nYfO-1">define-insert-table.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+NAME=$(basename --suffix=.schema.sql "$1")
+echo 'DROP TABLE IF EXISTS "'"$NAME"'";'
+cat "$1"
+echo '.separator "\t"'
+echo ".import '$2' $NAME"
+</pre>
+◼
+</div>
+<h2 id="long-term-survival">Long-term survival</h2>
+<p>We already know from <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-lY91r-1">:table patients-tumors.sql-result</a><span style="white-space:nowrap"> </span>⟫</span></span> that there are 516 patients for whom we have both amplification and transcript level data. Now we can ask, for how many of them do we have an event (patient dies) within the first 5 years?</p>
+<div class="codechunk">
+<p><span id="NW0-44RK6Q-1" class="defn"><span class="chunknr">C72:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-44RK6Q-1">five-year-events.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+WITH ampl_mrna AS ( <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-44RK6Q-1-u1" href="#NW0-3SH6bU-1">ampl-mrna.fragment.sql</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> )
+SELECT count(*) AS "Number of events"
+FROM patient_survival
+  INNER JOIN ampl_mrna
+    ON ampl_mrna.ampl = "Barcode"
+WHERE "Event" = 'Death'
+  AND "Days" &lt; 365*5;
+</pre>
+◼
+</div>
+<div id="NW0-14PR23-1" class="lirdisplay">
+<div class="lirtable">
+<div class="tableheader">
+<span class="tablename">Table 7:</span> <span class="tablefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/five-year-events.sql-result"><code>five-year-events.sql-result</code></a></span>
+</div>
+<table>
+<TR>
+<TH>
+Number of events
+</TH>
+</TR>
+<TR>
+<TD>
+39
+</TD>
+</TR>
+</table>
+<div class="tablemeta">
+<span class="tabletitle">Number of events within the first 5 years.</span>
+</div>
+</div>
+</div>
+<p>And finally, we need a table that we can use to do the survival statistics in R. For the survival statistics, we need at the very least a table with two columns: one with the follow-up times, and one with the status indicator with 0 for alive and 1 for dead. We also will need the patient barcodes for the amplification dataset and the sample barcode for the transcript level dataset.</p>
+<div class="codechunk">
+<p><span id="NW0-2pGpLn-1" class="defn"><span class="chunknr">C73:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2pGpLn-1">survival-table.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+WITH
+  ampl_mrna AS ( <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-2pGpLn-1-u1" href="#NW0-3SH6bU-1">ampl-mrna.fragment.sql</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> ),
+  patient_event_time AS (
+    SELECT
+      "Barcode" AS barcode,
+      "Event" AS event,
+      MAX("Days"/365.25) AS years
+    FROM patient_survival
+    GROUP BY barcode
+  )
+SELECT
+  ampl AS ampl_patient,
+  mrna AS mrna_sample,
+  CASE
+    WHEN event = 'Death' AND years &lt;= 5 THEN 1
+    WHEN event &lt;&gt; 'Death' OR years &gt; 5 THEN 0
+  END AS status,
+  CASE
+    WHEN years &lt;= 5 THEN years
+    ELSE 5
+  END AS time
+FROM patient_event_time
+  INNER JOIN ampl_mrna ON ampl_patient = barcode;
+</pre>
+◼
+</div>
+<p>And, of course, the IDs of the genes we are interested in:</p>
+<div class="codechunk">
+<p><span id="NW0-2Tgqws-1" class="defn"><span class="chunknr">C74:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2Tgqws-1">survival-genes.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+SELECT
+  "Associated Gene Name" AS name,
+  "Ensembl Gene ID" AS id
+FROM id_descr_name
+WHERE name IN ('STARD3', 'LAPTM4B', 'NDRG1', 'SERPINA1');
+</pre>
+◼
+</div>
+<p>In order to avoid loading the complete data matrices multiple times, we will load them once and save only the four genes of interest, and only the columns we need.</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-D" class="defn"><span class="chunknr">C75:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-D">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-C">⇧<span style="white-space:nowrap"> </span>C64</a></span></p>
+<pre>
+survival-genes.Rsave: survival-genes.R \
+                      input-data.Rsave \
+                      survival-table.tsv-result \
+                      survival-genes.tsv-result
+	Rscript --vanilla $^ $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-E">⇩<span style="white-space:nowrap"> </span>C77</a></span>
+</div>
+<div class="codechunk">
+<p><span id="NW0-18leZM-1" class="defn"><span class="chunknr">C76:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-18leZM-1">survival-genes.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("input.file",
+                "clinical.file",
+                "genes.file",
+                "save.file")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-18leZM-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+read.delim(args["clinical.file"]) -&gt; clinical
+attach(clinical)
+as.character(ampl_patient) -&gt; ampl.patient
+as.character(mrna_sample) -&gt; mrna.sample
+
+load(args["input.file"])
+ampl[,ampl.patient] -&gt; ampl
+mrna[,mrna.sample] -&gt; mrna
+
+as.matrix(read.delim(args["genes.file"])) -&gt; genes
+
+ampl.survival &lt;- ampl[genes[,"id"],]
+rownames(ampl.survival) &lt;- genes[,"name"]
+mrna.survival &lt;- mrna[genes[,"id"],]
+rownames(mrna.survival) &lt;- genes[,"name"]
+
+save(status, time, ampl.survival, mrna.survival, file=args["save.file"])
+</pre>
+◼
+</div>
+<div id="NW0-g08F3-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 2:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/survival-genes.Rsave"><code>survival-genes.Rsave</code></a></span>
+</div>
+</div>
+<h2 id="effects-on-long-term-patient-survival">Effects on long-term patient survival</h2>
+<p>Now we determine the correlation between the amplification status, transcipt levels, and patient survival. First, we split patients in two groups. For the amplification data, the two groups are “basal” and “amplified”. For the transcript level data, the two groups are simply levels below and above the median within this gene.</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-E" class="defn"><span class="chunknr">C77:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-E">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-D">⇧<span style="white-space:nowrap"> </span>C75</a></span></p>
+<pre>
+%-survival-curve.svg: survival-curve.R survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ svg
+
+%-survival-curve.pdf: survival-curve.R survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ pdf
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-F">⇩<span style="white-space:nowrap"> </span>C82</a></span>
+</div>
+<div id="NW0-4FihYH-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 3:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/SERPINA1-survival-curve.svg"><code>SERPINA1-survival-curve.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/SERPINA1-survival-curve.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Survival curve for <em>SERPINA1</em>.</span> <span class="figurecaption"><em>SERPINA1</em> amplification status and transcript levels are positively correlated with patient survival, as reported previously.</span>
+</div>
+</div>
+</div>
+<div id="NW0-4OiMsh-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 4:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/STARD3-survival-curve.svg"><code>STARD3-survival-curve.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/STARD3-survival-curve.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Survival curve for <em>STARD3</em>.</span>
+</div>
+</div>
+</div>
+<div id="NW0-3gcXiq-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 5:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/NDRG1-survival-curve.svg"><code>NDRG1-survival-curve.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/NDRG1-survival-curve.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Survival curve for <em>NDRG1</em>.</span> <span class="figurecaption"><em>NDRG1</em> amplification and upregulation of transcript levels both have a weak negative effect on breast cancer patient survival. </span>
+</div>
+</div>
+</div>
+<div id="NW0-3euoPv-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 6:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-survival-curve.svg"><code>LAPTM4B-survival-curve.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/LAPTM4B-survival-curve.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Survival curve for <em>LAPTM4B</em>.</span> <span class="figurecaption"><em>LAPTM4B</em> amplification has a statistically significant effect on the survival of breast cancer patients. Transcript levels upregulation exhibits a similar tendency, but the difference is not statistically significant. </span>
+</div>
+</div>
+</div>
+<div id="NW0-1fAruu-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 3:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/SERPINA1-survival-curve.pdf"><code>SERPINA1-survival-curve.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-2wyhVY-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 4:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/NDRG1-survival-curve.pdf"><code>NDRG1-survival-curve.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-XppJB-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 5:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-survival-curve.pdf"><code>LAPTM4B-survival-curve.pdf</code></a></span>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-jO6tT-1" class="defn"><span class="chunknr">C78:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-jO6tT-1">survival-curve.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("save.file", "gene.name", "fig.file", "format")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-jO6tT-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-jO6tT-1-u2" href="#NW0-3aBixt-1">Load survival saved state</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-jO6tT-1-u3" href="#NW0-T5WOt-1">Survival statistics</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-jO6tT-1-u4" href="#NW0-3vTkTt-1">Open graphics device R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+open.device(args["format"],
+            args["fig.file"], width=8, height=4.4, pointsize=11)
+par(mfrow=c(1,2))
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-jO6tT-1-u5" href="#NW0-23s2wg-1">Plot survival R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+plot.survival(list(fit=survfit.ampl, diff=survdiff.ampl),
+              main.text="Amplification",
+              title.text=paste(gn, "amplification"),
+              legend.text=c("basal", "amplified"))
+plot.survival(list(fit=survfit.mrna, diff=survdiff.mrna),
+              main.text="Transcript levels",
+              title.text=paste(gn, "transcript"),
+              legend.text=c("below median", "above median"))
+dev.off() -&gt; foo
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3aBixt-1" class="defn"><span class="chunknr">C79:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3aBixt-1">Load survival saved state</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-jO6tT-1">C78</a></span></p>
+<pre>
+load(args["save.file"])
+args["gene.name"] -&gt; gn
+ampl.survival[gn,] -&gt; ampl
+mrna.survival[gn,] -&gt; mrna
+</pre>
+◼
+</div>
+<p>The survival statistics are done with the help of <code>library(survival)</code>.</p>
+<div class="codechunk">
+<p><span id="NW0-T5WOt-1" class="defn"><span class="chunknr">C80:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-T5WOt-1">Survival statistics</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-jO6tT-1">C78</a></span></p>
+<pre>
+mrna &gt; median(mrna) -&gt; mrna.high
+
+library(survival)
+
+Surv(time, status) -&gt; so
+survfit(so ~ ampl) -&gt; survfit.ampl
+survdiff(so ~ ampl) -&gt; survdiff.ampl
+survfit(so ~ mrna &gt; median(mrna, na.rm=T)) -&gt; survfit.mrna
+survdiff(so ~ mrna &gt; median(mrna, na.rm=T)) -&gt; survdiff.mrna
+</pre>
+◼
+</div>
+<p>The p-value is calculated from the <span class="math inline"><em>χ</em><sup>2</sup></span> test statistic with one degree of freedom (this is always the case, since we always have two groups, and both have patients in them). A table with the “numbers at risk” is added to directly to the plot.</p>
+<div class="codechunk">
+<p><span id="NW0-23s2wg-1" class="defn"><span class="chunknr">C81:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-23s2wg-1">Plot survival R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-jO6tT-1">C78</a>, <a href="#NW0-1iwS92-1">C83</a></span></p>
+<pre>
+plot.survival &lt;- function(x, main.text, title.text, legend.text) {
+    pval &lt;- 1 - pchisq(x$diff$chisq, 1)
+    cols &lt;- c("darkblue", "darkred")
+    plot(x$fit,
+         main=main.text,
+         ylab="Survival", xlab="Years",
+         xlim=c(-0.4,5.3), ylim=c(0.5,1),
+         col=cols,
+         bty="n")
+    legend("bottomleft",
+           legend=legend.text,
+           lty=1,
+           bty="n",
+           col=cols)
+    legend("bottomright",
+           bty="n",
+           legend=paste("p=", signif(pval, digits=2), sep=""))
+    text(x=-0.3, y=0.71, labels="Numbers at risk", pos=4, offset=0)
+    text(x=0:5,
+         y=rep(c(0.67,0.63), each=6),
+         col=rep(cols, each=6),
+         labels=summary(x$fit, times=0:5)$n.risk)
+}
+</pre>
+◼
+</div>
+<p>Is there an additive (negative) effect of <em>LAPTM4B</em> and <em>NDRG1</em> on patient survival?</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-F" class="defn"><span class="chunknr">C82:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-F">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-E">⇧<span style="white-space:nowrap"> </span>C77</a></span></p>
+<pre>
+%-survival-curve-combined.svg: survival-curve-combined.R \
+                               survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ svg
+
+%-survival-curve-combined.pdf: survival-curve-combined.R \
+                               survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ pdf
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-G">⇩<span style="white-space:nowrap"> </span>C87</a></span>
+</div>
+<div id="NW0-1Wwxw9-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 7:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/NDRG1-LAPTM4B-survival-curve-combined.svg"><code>NDRG1-LAPTM4B-survival-curve-combined.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/NDRG1-LAPTM4B-survival-curve-combined.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle">Combined effect of <em>NDRG1</em> and <em>LAPTM4B</em> on survival.</span> <span class="figurecaption">On the left hand side the patients are separated in two groups: in the group “both high” (in red), the transcript levels for both patients are above median. In the other group, “different” (in blue), are all other patients. On the right hand side, patients with different mRNA expression levels for the two trancripts were removed from the data set. In the “high” group (in red) are the patients with both transcript levels high, while in the “low” group (in blue) are the patients that have both transcript levels low. </span>
+</div>
+</div>
+</div>
+<div id="NW0-1jDz3F-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 6:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/NDRG1-LAPTM4B-survival-curve-combined.pdf"><code>NDRG1-LAPTM4B-survival-curve-combined.pdf</code></a></span>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-1iwS92-1" class="defn"><span class="chunknr">C83:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1iwS92-1">survival-curve-combined.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("save.file", "gene1.gene2.names", "fig.file", "format")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u2" href="#NW0-21mfmf-1">Names and transcript levels of the two genes</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+apply(mrna, 1, median, na.rm=T) -&gt; mrna.median
+mrna &gt; mrna.median -&gt; is.high
+apply(is.high, 2, all) -&gt; both.high
+
+library(survival)
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u3" href="#NW0-3Gtuue-1">Patient survival: both high vs. different</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> -&gt; high.different
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u4" href="#NW0-1iSKoL-1">Patient survival: both high vs. both low</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> -&gt; high.low
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u5" href="#NW0-3vTkTt-1">Open graphics device R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+open.device(args["format"],
+            args["fig.file"], width=8, height=4.4, pointsize=11)
+par(mfrow=c(1,2))
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1iwS92-1-u6" href="#NW0-23s2wg-1">Plot survival R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+plot.survival(high.different,
+              main.text="Different vs. High",
+              legend.text=c("different", "both high"))
+plot.survival(high.low,
+              main.text="Low vs. High",
+              legend.text=c("both low", "both high"))
+dev.off() -&gt; foo
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-21mfmf-1" class="defn"><span class="chunknr">C84:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-21mfmf-1">Names and transcript levels of the two genes</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1iwS92-1">C83</a></span></p>
+<pre>
+load(args["save.file"])
+strsplit(args["gene1.gene2.names"],
+         split="-", fixed=T)[[1]] -&gt; gene.names
+mrna.survival[gene.names,] -&gt; mrna
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3Gtuue-1" class="defn"><span class="chunknr">C85:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3Gtuue-1">Patient survival: both high vs. different</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1iwS92-1">C83</a></span></p>
+<pre>
+Surv(time, status) -&gt; so
+list(fit=survfit(so ~ both.high), diff=survdiff(so ~ both.high))
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1iSKoL-1" class="defn"><span class="chunknr">C86:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1iSKoL-1">Patient survival: both high vs. both low</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1iwS92-1">C83</a></span></p>
+<pre>
+mrna &lt; mrna.median -&gt; is.low
+apply(is.low, 2, all) -&gt; both.low
+both.high | both.low -&gt; filtered
+time[filtered] -&gt; time.f
+status[filtered] -&gt; status.f
+both.high[filtered] -&gt; both.high.f
+
+Surv(time.f, status.f) -&gt; so.f
+list(fit=survfit(so.f ~ both.high.f), diff=survdiff(so.f ~ both.high.f))
+</pre>
+◼
+</div>
+<h1 id="protein-complexes-regulated-by-micro-rna">Protein complexes regulated by micro-RNA</h1>
+<p>Is there a correlation between the predicted targets of the same miRNA? This question is motivated by the known phenomenon of miRNA targetting a complex of functionally related proteins. The predicted targets are collected using a short-list of experimentally validated micro-RNAs. Then, these predicted targets for each gene are correlated to the gene using the available mRNA levels from patient solid tumors.</p>
+<h2 id="micro-rnas-and-predicted-targets">Micro-RNAs and predicted targets</h2>
+<p>To answer this question, we will try to find experimentally validated micro-RNAs that target the genes of interest, as listed in <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-6Htgi-1">Genes of interest</a><span style="white-space:nowrap"> </span>⟫</span></span>. We drop <em>STARD3</em> from that list, as it correlates very strongly with <em>ERBB2</em> and is far less studied experimentally; we also drop <em>LAPTM4A</em>, as it showed no correlation to any of the other genes, and is also poorly studied. We are left with <em>ERBB2</em>, <em>NDRG1</em>, and <em>LAPTM4B</em>. The main criteria for choosing a miRNA that targets each gene is that it downregulates the gene in the context of cancer progression.</p>
+<p>For <em>ERBB2</em>, hsa-miR-155-5p (MIMAT0000646) was shown to downregulate ErbB2 and suppress ErbB2-induced malignant transformation of breast epithelial cells by two distinct mechanism: repressing ErbB2 transcription, and directly targetting ErbB2 via a regulatory element (doi:10.1038/onc.2016.132).</p>
+<p>For <em>NDRG1</em>, miR-769-3p (MIMAT0003887) was found to down-regulate <em>NDRG1</em> in MCF-7 cells during reoxygenation (doi:10.1038/srep05908).</p>
+<p>For <em>LAPTM4B</em>, miR-188-5p (MIMAT0000457) was found to inhibit tumor growth and metastasis by repressing <em>LAPTM4B</em> expression, acting as a tumor supressor (doi:10.18632/oncotarget.3341).</p>
+<p>Using miRWalk2.0:</p>
+<ul>
+<li>Predicted Target Module <span class="math inline">→</span> MicroRNA-Gene Targets</li>
+<li>Human, miRBase, MIMATid</li>
+<li>Identifiers:</li>
+</ul>
+<pre><code>MIMAT0000646
+MIMAT0003887
+MIMAT0000457</code></pre>
+<ul>
+<li>Other databases: miRWalk, miRanda, miRDB, RNA22, Targetscan</li>
+<li>“Putative target genes predicted by chosen algorithms within mRNA selected regions” <span class="math inline">→</span> 3UTR</li>
+</ul>
+<p>The downloaded file:</p>
+<div id="NW0-3PiARa-1" class="lirdisplay">
+<div class="lirsource">
+<span class="sourcename">S8:</span> <span class="sourcefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/microrna/3utr-comparative.tsv"><code>microrna/3utr-comparative.tsv</code></a></span>
+</div>
+</div>
+<p>What are the columns in this file?</p>
+<div id="NW0-TYjy8-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 9:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/microrna/table-header"><code>microrna/table-header</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+     1	miRNA
+     2	MIMATid
+     3	Gene
+     4	EntrezID
+     5	RefseqID
+     6	miRWalk
+     7	miRanda
+     8	miRDB
+     9	RNA22
+    10	Targetscan
+    11	SUM
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Column labels.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-G" class="defn"><span class="chunknr">C87:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-G">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-F">⇧<span style="white-space:nowrap"> </span>C82</a></span></p>
+<pre>
+microrna/table-header: microrna/3utr-comparative.tsv
+	<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-G-u1" href="#NW0-2NcBeN-1">Get first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> $^ \
+	    | <span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-G-u2" href="#NW0-3yc2Bl-1">Tab-separated fields to lines</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> \
+	    | nl \
+	    &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-H">⇩<span style="white-space:nowrap"> </span>C89</a></span>
+</div>
+<p>For now, we are interested in the miRNA identifier (1), the predicted target gene (3), the IDs of the mRNA sequences being targetted, and the number of positive predictions for that gene, commonly used as an indicator of the prediction strength (11). We will a table with these columns to the relational database.</p>
+<div class="codechunk">
+<p><span id="NW0-4IDiAo-1" class="defn"><span class="chunknr">C88:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4IDiAo-1">mirna.schema.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+CREATE TABLE mirna (
+  mirna TEXT,
+  gene TEXT,
+  refseqid TEXT,
+  sum INTEGER
+);
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-H" class="defn"><span class="chunknr">C89:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-H">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-G">⇧<span style="white-space:nowrap"> </span>C87</a></span></p>
+<pre>
+tcga.db: mirna.define-insert-table.sql
+mirna.rows-tsv: microrna/3utr-comparative.tsv
+	<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3dMVig-H-u1" href="#NW0-AQfF7-1">Drop first row</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span> $^ \
+	    | cut --fields=1,3,5,11 \
+	    &gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-I">⇩<span style="white-space:nowrap"> </span>C90</a></span>
+</div>
+<p>To be able to find the intersection of genes that are in the predicted targets, <em>and</em> in the transcript level matrix, we will insert the row labels of the two matrices in the relational database.</p>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-I" class="defn"><span class="chunknr">C90:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-I">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-H">⇧<span style="white-space:nowrap"> </span>C89</a></span></p>
+<pre>
+tcga.db: ampl_rownames.create-table.sql \
+         mrna_rownames.create-table.sql
+%_rownames.tsv: %.rownames
+	echo "Ensembl Gene ID" &gt; $@
+	cat $^ &gt;&gt; $@
+
+</pre>
+<span class="chunknext"><a href="#NW0-3dMVig-J">⇩<span style="white-space:nowrap"> </span>C97</a></span>
+</div>
+<p>To be able to caclulate the transcript level correlation for each of these genes, we need the Ensembl Gene IDs for the predictions for each of the three miRNAs. Note the reuse of <code>columns-of-interest.tsv-result</code>, generated in <span class="quote"><span class="quoteduse">⟪<span style="white-space:nowrap"> </span><a href="#NW0-32ZcIC-1">columns-of-interest.query.sql</a><span style="white-space:nowrap"> </span>⟫</span></span>.</p>
+<div class="codechunk">
+<p><span id="NW0-4WTDz5-1" class="defn"><span class="chunknr">C91:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-4WTDz5-1">:make Calculate and save the mRNA correlation coefficients</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+mirna-mrna.Rsave: mirna-mrna.R \
+                  input-data.Rsave \
+                  columns-of-interest.tsv-result \
+                  mirna-genes.tsv-result \
+                  hsa-miR-155-5p.mirna-predictions.tsv \
+                  hsa-miR-188-5p.mirna-predictions.tsv \
+                  hsa-miR-769-3p.mirna-predictions.tsv
+	Rscript --vanilla $^ $@
+
+mirna-counts.txt: hsa-miR-155-5p.mirna-predictions.tsv \
+                  hsa-miR-188-5p.mirna-predictions.tsv \
+                  hsa-miR-769-3p.mirna-predictions.tsv
+	wc --lines $^ &gt; $@
+
+%.mirna-predictions.tsv: mirna-predictions.bash tcga.db
+	bash $^ $* &gt; $@
+
+</pre>
+◼
+</div>
+<div id="NW0-qtbnM-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 10:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/mirna-counts.txt"><code>mirna-counts.txt</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+  957 hsa-miR-155-5p.mirna-predictions.tsv
+  826 hsa-miR-188-5p.mirna-predictions.tsv
+  770 hsa-miR-769-3p.mirna-predictions.tsv
+ 2553 total
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">Number of targets for each gene.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-2MpL1p-1" class="defn"><span class="chunknr">C92:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-2MpL1p-1">mirna-genes.query.sql</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+WITH gene_mirna ("Associated Gene Name", mirna) AS (
+  VALUES
+    ('ERBB2', 'hsa-miR-155-5p'),
+    ('NDRG1', 'hsa-miR-769-3p'),
+    ('LAPTM4B', 'hsa-miR-188-5p')
+)
+SELECT
+  "Associated Gene Name" AS name,
+  "Ensembl Gene ID" AS id,
+  mirna
+FROM id_descr_name
+  NATURAL INNER JOIN gene_mirna;
+</pre>
+◼
+</div>
+<div id="NW0-Lc4c-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 7:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/mirna-genes.tsv-result"><code>mirna-genes.tsv-result</code></a></span>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3jQ00O-1" class="defn"><span class="chunknr">C93:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3jQ00O-1">mirna-predictions.bash</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+sqlite3 "$1" &lt;&lt; end_of_file
+.header on
+.separator "\t"
+WITH gene_count_sum AS (
+  SELECT
+    gene,
+    count(refseqid) AS count,
+    sum
+  FROM mirna
+  WHERE mirna = '$2'
+  GROUP BY gene, sum
+)
+SELECT DISTINCT
+  gene,
+  "Ensembl Gene ID" AS id
+FROM gene_count_sum
+  INNER JOIN id_descr_name
+    ON gene = "Associated Gene Name"
+  NATURAL INNER JOIN ampl_rownames
+  NATURAL INNER JOIN mrna_rownames
+WHERE sum &gt;= 4
+  OR (sum = 3 AND count &gt;= 2);
+end_of_file
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-1tlbOt-1" class="defn"><span class="chunknr">C94:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-1tlbOt-1">mirna-mrna.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("input",
+                "cols",
+                "genes",
+                "one",
+                "two",
+                "three",
+                "result")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1tlbOt-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+as.matrix(read.delim(args["genes"])) -&gt; mirna.gene.id
+mirna.gene.id[,c("name","id")] -&gt; gene.id
+mirna.gene.id[,"mirna"] -&gt; rownames(gene.id)
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1tlbOt-1-u2" href="#NW0-D82SW-1">Load miRNA targets R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+lapply(list("one", "two", "three"),
+       load.mirna.targets) -&gt; mirna.targets
+lapply(mirna.targets,
+       function(x) { x$gene["name"] }) -&gt; names(mirna.targets)
+
+load(args["input"])
+as.matrix(read.delim(args["cols"])) -&gt; cols
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1tlbOt-1-u3" href="#NW0-1e0u0j-1">Keep only the overlapping columns</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+pearson.cor &lt;- function(x, y) {
+    cor.test(x, y, method="pearson")$estimate
+}
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-1tlbOt-1-u4" href="#NW0-MdTiB-1">Shortlist highly correlated targets R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+lapply(mirna.targets, target.cor) -&gt; gene.complex
+
+save(gene.complex, file=args["result"])
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-D82SW-1" class="defn"><span class="chunknr">C95:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-D82SW-1">Load miRNA targets R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1tlbOt-1">C94</a></span></p>
+<pre>
+load.mirna.targets &lt;- function(arg.name) {
+    strsplit(args[arg.name],
+             split=".", fixed=T)[[1]][1] -&gt; mirna.name
+    as.matrix(read.delim(args[arg.name])) -&gt; mirna.targets
+    mirna.targets[,"id"] -&gt; target.ids
+    mirna.targets[,"gene"] -&gt; names(target.ids)
+    list(mirna=mirna.name,
+         gene=gene.id[mirna.name,],
+         targets=target.ids)
+}
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-MdTiB-1" class="defn"><span class="chunknr">C96:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-MdTiB-1">Shortlist highly correlated targets R function</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> Appears in <a href="#NW0-1tlbOt-1">C94</a></span></p>
+<pre>
+target.cor &lt;- function(x) {
+    mrna[x$gene["id"],] -&gt; gene.mrna
+    mrna[x$targets,] -&gt; targets.mrna
+    names(x$targets) -&gt; rownames(targets.mrna)
+    apply(targets.mrna, 1, pearson.cor, gene.mrna) -&gt; target.cors
+    sort(target.cors[target.cors &gt; 0.33], decreasing=T) -&gt; shortlist
+    targets.mrna[names(shortlist),] -&gt; targets.mrna
+    ampl[x$gene["id"],] -&gt; gene.ampl
+    ampl[x$targets,] -&gt; targets.ampl
+    names(x$targets) -&gt; rownames(targets.ampl)
+    targets.ampl[names(shortlist),] -&gt; targets.ampl
+    
+    list(mirna=x$mirna,
+         hits=shortlist,
+         gene.ampl=gene.ampl,
+         ampl=targets.ampl,
+         gene.mrna=gene.mrna,
+         mrna=targets.mrna)
+}
+</pre>
+◼
+</div>
+<div id="NW0-2ddZYl-1" class="lirdisplay">
+<div class="lirlisting">
+<div class="listingheader">
+<span class="listingname">Listing 11:</span> <span class="listingfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/mirna-mrna-result.txt"><code>mirna-mrna-result.txt</code></a></span>
+</div>
+<div class="listingcontents">
+<pre>
+Gene:  ERBB2 
+miRNA:  hsa-miR-155-5p 
+Targets:
+[1] "RAB27B" "GPD1L" 
+
+Gene:  LAPTM4B 
+miRNA:  hsa-miR-188-5p 
+Targets:
+ [1] "LAPTM4B"  "YWHAZ"    "JMJD6"   
+ [4] "SLMO2"    "TXNRD1"   "C1orf106"
+ [7] "RBL1"     "CDC25B"   "PVR"     
+[10] "TMEM194A" "PCMT1"    "UQCRB"   
+[13] "UCK2"     "FBXO45"   "OSGIN2"  
+[16] "USP31"    "SNX22"    "AQP9"    
+[19] "SPAST"   
+
+Gene:  NDRG1 
+miRNA:  hsa-miR-769-3p 
+Targets:
+ [1] "NDRG1"    "C11orf86" "SLC6A2"  
+ [4] "KIF1B"    "TRIM2"    "CDCA8"   
+ [7] "STAC"     "HIC2"     "FOXK2"   
+[10] "KLF11"    "ASAP1"    "PHKG1"   
+[13] "MFGE8"    "RBM38"   
+
+</pre>
+</div>
+<div class="listingmeta">
+<span class="listingtitle">The predicted targets with high correlation on the transcript level.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-3dMVig-J" class="defn"><span class="chunknr">C97:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3dMVig-J">:make</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><br> <span class="chunkprev"><a href="#NW0-3dMVig-I">⇧<span style="white-space:nowrap"> </span>C90</a></span></p>
+<pre>
+mirna-mrna-result.txt: mirna-mrna-result.txt.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@
+
+</pre>
+◼
+</div>
+<div class="codechunk">
+<p><span id="NW0-3g7ckd-1" class="defn"><span class="chunknr">C98:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3g7ckd-1">mirna-mrna-result.txt.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("data", "result")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-3g7ckd-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+load(args["data"])
+
+print.gene.complex &lt;- function(i) {
+    cat("Gene: ", names(gene.complex)[[i]], "\n")
+    cat("miRNA: ", gene.complex[[i]]$mirna, "\n")
+    cat("Targets:\n")
+    print(names(gene.complex[[i]]$hits))
+    cat("\n")
+}
+
+sink(file=args["result"])
+options(width=40)
+lapply(seq_along(gene.complex), print.gene.complex) -&gt; foo
+sink(file=NULL)
+</pre>
+◼
+</div>
+<p>Which are the interesting hits in this shortlist?</p>
+<p>For <em>LAPTM4B</em>, there are several interesting hits. One is <em>PVR</em>, encoding the Poliovirus receptor protein, which mediates natural killer (NK) cell adhesion and triggers NK cell effector functions. It might provide tumors with a mechanism of immunoevasion, and it plays a role in mediating tumor cell invasion and migration.</p>
+<p>Another interesting gene is <em>SNX22</em>, encoding the Sorting nexin-22 protein, which may be involved in several stages of intracellular trafficking (By similarity). It interacts with membranes containing phosphatidylinositol 3-phosphate (PtdIns(3P)).</p>
+<p>Finally, <em>SPAST</em> (Spastin) is a protein that is required for the membrane traffic from the ER to the Golgi.</p>
+<p>Now, visualize the amplification status and transcript level correlation between <em>LAPTM4B</em> and each of these three genes, as available in the patient solid tumor samples.</p>
+<div class="codechunk">
+<p><span id="NW0-3z8WXs-1" class="defn"><span class="chunknr">C99:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-3z8WXs-1">:make Draw correlation plots for miRNA targets</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+%-mirna.svg: plot-mirna-target.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@ $* svg
+
+%-mirna.pdf: plot-mirna-target.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@ $* pdf
+
+</pre>
+◼
+</div>
+<div id="NW0-3JR2lh-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 8:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-PVR-mirna.pdf"><code>LAPTM4B-PVR-mirna.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-25eCOe-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 9:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-SNX22-mirna.pdf"><code>LAPTM4B-SNX22-mirna.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-37iOp2-1" class="lirdisplay">
+<div class="lirresult">
+<span class="resultname">Result 10:</span> <span class="resultfile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-SPAST-mirna.pdf"><code>LAPTM4B-SPAST-mirna.pdf</code></a></span>
+</div>
+</div>
+<div id="NW0-4SlNZW-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 8:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-PVR-mirna.svg"><code>LAPTM4B-PVR-mirna.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/LAPTM4B-PVR-mirna.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle"><em>PVR</em>.</span>
+</div>
+</div>
+</div>
+<div id="NW0-g2VL1-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 9:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-SNX22-mirna.svg"><code>LAPTM4B-SNX22-mirna.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/LAPTM4B-SNX22-mirna.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle"><em>SNX22</em>.</span>
+</div>
+</div>
+</div>
+<div id="NW0-4e3yK7-1" class="lirdisplay">
+<div class="lirfigure">
+<div class="figureheader">
+<span class="figurename">Figure 10:</span> <span class="figurefile"><a href="/home/bvassile/Documents/code/tmpendo/endobrca/.lir/LAPTM4B-SPAST-mirna.svg"><code>LAPTM4B-SPAST-mirna.svg</code></a></span>
+</div>
+<div class="figurecontents">
+<img src=".lir/LAPTM4B-SPAST-mirna.svg">
+</div>
+<div class="figuremeta">
+<span class="figuretitle"><em>SPAST</em>.</span>
+</div>
+</div>
+</div>
+<div class="codechunk">
+<p><span id="NW0-10Gl3O-1" class="defn"><span class="chunknr">C100:</span> ⟪<span style="white-space:nowrap"> </span><a href="#NW0-10Gl3O-1">plot-mirna-target.R</a><span style="white-space:nowrap"> </span>⟫<span style="white-space:nowrap"> </span>≡</span><span class="chunkuses"><br> root chunk</span></p>
+<pre>
+args.names &lt;- c("data", "plot", "genes", "format")
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-10Gl3O-1-u1" href="#NW0-1XetAy-1">Read and name R command line arguments</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+load(args["data"])
+strsplit(args["genes"], split="-", fixed=T)[[1]] -&gt; gene.names
+gene.names[1] -&gt; gene.of.interest
+gene.names[2] -&gt; mirna.target
+gene.complex[[gene.of.interest]] -&gt; g
+a1 &lt;- g$gene.ampl
+a2 &lt;- g$ampl[mirna.target,]
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-10Gl3O-1-u2" href="#NW0-4JbOhF-1">Color mRNA scatter plot R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+col &lt;- scatter.plot.col(a1, a2)
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-10Gl3O-1-u3" href="#NW0-3vTkTt-1">Open graphics device R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+open.device(args["format"], args["plot"],
+            width=7.5, height=5.2, pointsize=12)
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-10Gl3O-1-u4" href="#NW0-1t8KJT-1">Define layout for correlation plots R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+cor.plots.layout(1)
+
+<span class="embeddeduse">&Lang;<span style="white-space:nowrap">&#8201;</span><a id="NW0-10Gl3O-1-u5" href="#NW0-1zRKUP-1">Draw correlation plots R function</a><span style="white-space:nowrap">&#8201;</span>&Rang;</span>
+
+draw.cor.plots(list(name.a=gene.of.interest,
+                    name.b=mirna.target,
+                    chisq.result=chisq.test(a1, a2),
+                    transcript.a=g$gene.mrna,
+                    transcript.b=g$mrna[mirna.target,],
+                    mrna.col=col,
+                    pearson.estimate=g$hits[mirna.target]))
+
+dev.off() -&gt; foo
+</pre>
+◼
+</div>
+</body>
+</html>
