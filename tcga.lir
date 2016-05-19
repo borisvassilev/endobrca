@@ -1,0 +1,1386 @@
+---
+title: TCGA breast cancer data analysis
+author: Boris Vassilev; Elina Ikonen
+<<:eval>>=
+echo "date: $(date --utc +'%Y-%m-%d %H:%M:%S UTC')"
+@
+...
+
+# Input data
+For all breast cancer patients, we have genome-wide amplification and transcript level data.
+Patients and samples are identified by their TCGA "barcodes".
+There is relevant meta-data embedded in these barcodes.
+
+Genes are identified by their Enseml Gene IDs.
+
+## Amplification and transcript levels
+Our collaborator Riku Louhimo has pre-processed the genome-wide data available from TCGA for all breast cancer samples and provided two sets of data. Both sets have one gene on every row, with each field representing one sample.
+
+The first set contains DNA _amplification calls_: a matrix of 1 (Amplified), 0 (Not amplified), or `NA` (Not available).  The other set contains mRNA _transcript levels_, a matrix of floating-point values or `NA` (Not available).
+
+<<:source raw/ampl.tsv>>=
+<<:source raw/mrna.tsv>>=
+@
+
+Both files are quite large, as seen in the [[<<:listing rawdata.size>>]].
+
+Here is what Riku had to say about the data:
+
+> Copy numbers are measured with Affy 6.0 SNP Arrays.
+> Probes are genotyped, copy-number values are estimated and normalized to 2 with CRLMM.
+> Copy-number data are segmented with the circular binary segmentation (CBS) algorithm using the R package DNAcopy (parameters `undo.splits=sdundo`, `SD=3`, `alpha=0.01`).
+> Copy-number calls (1: amplification, 0: normal, $-1$: deletion) are made similarly to TCGA: in short, by assigning 1 to CNA regions with segment mean $> 2.3$ and $-1$ to regions with segment mean $< 1.7$.
+
+> In the copy-number-call-matrix you have, `NA` (not available) values occur in genes for which copy-number is normal, unnchanged, or diploid in all samples.
+> In the gene expression matrix, Agilent arrays contain control fields which denote several types of array or scanner errors and quality measures.
+> `NA`-values in this matrix are therefore a result of the Agilent scanner giving a bad quality flag to a probe which we than convert to `NA`.
+
+A couple of things to note:
+
+- There are no $-1$ values in the "copy number calls" (amplification) matrix, and Riku has told me that I shouldn't worry about it;
+- The `NA` values in the amplification matrix should be zeroes (no amplification), at least when interpreting them in a biological context (this is handled in [[<<Load the amplification matrix>>]]);
+- When working with the mRNA (transcript level) matrix, we just remove any `NA` values -- for example, in R, to get the median, use `median(mrna, na.rm=TRUE)`.
+
+For both files, the rows are labelled with Ensembl IDs for each gene and the columns are labelled with TCGA barcodes representing patients or samples.
+The results of the query:
+<<:listing rawdata.size>>=
+title: Raw data file sizes.
+caption: |
+    The sizes of each of the raw data files,
+    in a human-readable format.
+<<:make>>=
+rawdata.size: raw/ampl.tsv raw/mrna.tsv
+	du --dereference --human-readable --total $^ > $@
+
+@
+
+Since both files are quite big, and saved in a plain text, it is prohibitively expensive to load them.
+To avoid this, we load them once from R and save the data as a native R object that is both smaller and much faster to load.
+<<:listing input-data.Rsave.size>>=
+title: Size of the native R data object.
+caption: |
+    Once a tab-separated plain-text data matrix
+    has been loaded and saved as a native R object,
+    it becomes much smaller.
+<<:make>>=
+input-data.Rsave.size: input-data.Rsave
+	du --human-readable $^ > $@
+
+@
+
+To keep the intermediate data object, we declare it as `SECONDARY` in the Makefile.
+<<:make The R saved state>>=
+.SECONDARY: input-data.Rsave
+input-data.Rsave: input-data.R \
+                  ampl.rownames \
+                  ampl.colnames \
+                  ampl.vals \
+                  mrna.rownames \
+                  mrna.colnames \
+                  mrna.vals
+	Rscript --vanilla $^ $@
+
+@
+
+The script that reads the plain text data matrices and saves them to native R objects.
+It takes the names of all files as command line arguments.
+<<input-data.R>>=
+args <- commandArgs(trailingOnly = TRUE)
+names(args) <- c("ampl.rownames",
+                 "ampl.colnames",
+                 "ampl.vals",
+                 "mrna.rownames",
+                 "mrna.colnames",
+                 "mrna.vals",
+                 "save.file")
+
+<<Load the amplification matrix>>
+<<Load the mRNA matrix>>
+
+save(ampl, mrna, file=args["save.file"])
+@
+
+Here, the second line makes all `NA` values 0 (no amplification).
+The third one makes the amplification a truth value: `FALSE` for basal level and `TRUE` for amplification of the gene.
+<<Load the amplification matrix>>=
+ampl <- scan(file=args["ampl.vals"], what=integer())
+ampl[is.na(ampl)] <- 0
+ampl <- as.logical(ampl)
+ampl.rownames <- scan(file=args["ampl.rownames"], what=character())
+ampl.colnames <- scan(file=args["ampl.colnames"], what=character())
+
+ampl <- matrix(ampl,
+               nrow=length(ampl.rownames), ncol=length(ampl.colnames),
+               dimnames=list(ampl.rownames, ampl.colnames),
+               byrow=TRUE)
+@
+
+<<Load the mRNA matrix>>=
+mrna <- scan(file=args["mrna.vals"], what=numeric())
+mrna.rownames <- scan(file=args["mrna.rownames"], what=character())
+mrna.colnames <- scan(file=args["mrna.colnames"], what=character())
+
+mrna <- matrix(mrna,
+               nrow=length(mrna.rownames), ncol=length(mrna.colnames),
+               dimnames=list(mrna.rownames, mrna.colnames),
+               byrow=TRUE)
+@
+
+
+<<:make Matrix values and row and column labels>>=
+%.vals: get-vals.bash raw/%.tsv
+	bash $^ > $@
+
+%.rownames: get-rownames.bash raw/%.tsv
+	bash $^ > $@
+
+%.colnames: get-colnames.bash raw/%.tsv
+	bash $^ > $@
+
+<<get-vals.bash>>=
+< "$1" <<Drop first row>> | <<Drop first column>>
+<<get-rownames.bash>>=
+< "$1" <<Drop first row>> | <<Get first column>>
+<<get-colnames.bash>>=
+< "$1" <<Get first row>> | <<Drop first column>>
+<<Drop first row>>=
+sed -n '2~1p'
+<<Get first row>>=
+sed '1q'
+<<Drop first column>>=
+cut --complement --fields=1
+<<Get first column>>=
+cut --fields=1
+@
+
+## Mapping gene IDs to names
+All genes are identified by their Ensembl IDs.
+It would be convenient to be able to select genes based on the canonical names of their protein products.
+To do that, we donwloaded a table that maps Ensembl gene IDs to a short description of the gene and the associated gene name.
+This was done using the "Customize your download" feature on the [Ensembl downloads page](http://www.ensembl.org/downloads.html), with the following settings:
+
+Database: "Ensembl Genes 77";
+
+Dataset: "Homo sapiens genes (GRCh38)";
+
+Filters: "with HGNC ID(s): Only";
+
+Attributes: "Ensembl Gene ID", "Description", and "Associated Gene Name".
+
+The results of the query were downloaded as a tab-separated (TSV) file with a header and saved as:
+<<:source ensembl/id_descr_name.tsv>>=
+@
+
+Already we can check if any of the gene IDs in either of the two data matrices is **not** in this list.
+<<:listing mystery-counts>>=
+title: Number of genes without names.
+caption: There are quite a few genes without names; about 10% of the total.
+<<:make>>=
+mystery-counts: mystery-genes-ampl mystery-genes-mrna
+	wc --lines $^ > $@
+
+mystery-genes-%: sorted-genes-% sorted-genes-known
+	comm -2 -3 $^ > $@
+
+sorted-genes-%: %.rownames
+	sort --unique $^ > $@
+
+sorted-genes-known: ensembl/id_descr_name.tsv
+	<<Get first column>> $< | sort --unique > $@
+
+@
+
+We can already do a sanity check of the data.
+We will compare two genes that we know should be co-amplified in almost all samples, and correlate very well on the transcript level: _ERBB2_ and _STARD3_.
+We would have to find their IDs from the file `ensembl/id_descr_name.tsv`, and use these IDs to pick out the amplification and mRNA data from the saved R data object `input-data.Rsave`.
+This would be an informal validation of all work so far.
+
+<<:figure sanity-check.svg>>=
+title: Sanity check.
+caption: As expected, _STARD3_ and _ERBB2_ are almost always co-amplified and their transcript levels correlate very strongly.
+@
+
+<<:make>>=
+sanity-check.ids: sanity-check.bash ensembl/id_descr_name.tsv
+	bash $^ > $@
+
+<<sanity-check.bash>>=
+awk -v name='^STARD3$' '<<ID from name .awk>>' "$1"
+awk -v name='^ERBB2$' '<<ID from name .awk>>' "$1"
+@
+<<ID from name .awk>>=
+BEGIN { FS = "\t"; OFS = "\t" }
+$3 ~ name {
+    print $3, $1
+    exit
+}
+@
+<<:make>>=
+sanity-check.svg: sanity-check.R input-data.Rsave sanity-check.ids
+	Rscript --vanilla $^ $@
+
+@
+<<sanity-check.R>>=
+args.names <- c("save.file", "ids.file", "fig.file")
+<<Read and name R command line arguments>>
+
+ids.table <- read.delim(args["ids.file"], header=F, row.names=1)
+ensembl.id <- as.character(ids.table[,1])
+names(ensembl.id) <- rownames(ids.table)
+
+load(args["save.file"])
+
+ampl[ensembl.id["STARD3"],] -> stard3.ampl
+mrna[ensembl.id["STARD3"],] -> stard3.mrna
+ampl[ensembl.id["ERBB2"],] -> erbb2.ampl
+mrna[ensembl.id["ERBB2"],] -> erbb2.mrna
+
+chisq.test(erbb2.ampl, stard3.ampl) -> chisq.test.result
+
+svg(filename=args["fig.file"], width=7, height=4.7, pointsize=11)
+layout(matrix(c(1,2), nrow=1, ncol=2, byrow=T),
+       widths=c(2,3),
+       heights=c(1,1))
+
+# amplification
+ampl.c <- hcl(c(140,320), l=80)
+barplot(t(chisq.test.result$observed), beside=T, col=ampl.c,
+        xlab="ERBB2 ampl",
+        ylab="number of patients")
+legend("topright",
+       title="STARD3 ampl",
+       legend=c("FALSE", "TRUE"),
+       fill=ampl.c, border=ampl.c,
+       bty="n",
+       cex=.9)
+
+# mRNA
+plot(erbb2.mrna, stard3.mrna,
+     xlab="ERBB2 mRNA level", ylab="STARD3 mRNA level",
+     bty="n")
+
+dev.off() -> foo
+@
+<<Read and name R command line arguments>>=
+args <- commandArgs(trailingOnly=T)
+names(args) <- args.names
+@
+
+## Meta data: TCGA, Ensembl
+We will use a relational database to keep and query the TCGA meta data.
+<<:listing tcga.db.schema>>=
+title: The complete schema so far.
+@
+
+This is the complete schema for the database, generated automatically from the database file.
+<<:make>>=
+tcga.db.schema: tcga.db
+	echo '.schema' | sqlite3 $< > $@
+
+@
+
+To insert tables in to the database, we directly import tab-separated files with headers to a table named as the file, with the `.tsv` extension stripped.
+This uses a useful command of the [SQLite shell](https://www.sqlite.org/cli.html), `.import`.
+When the table with that name has not been defined yet, the header line in the imported file is used.
+<<create-table.bash>>=
+NAME=$(basename --suffix=.tsv "$1")
+echo 'DROP TABLE IF EXISTS "'"$NAME"'";'
+echo '.separator "\t"'
+echo ".import '$1' $NAME"
+@
+
+This defines an implicit rule that generates the SQL code for inserting a table, using [[<<create-table.bash>>]] defined above, if the appropriate `.tsv` file exists.
+<<:make Implicit rule for SQL tables from files with headers>>=
+%.create-table.sql: create-table.bash %.tsv
+	bash $^ > $@
+
+@
+
+This is the rule that builds and updates the database.
+Note that only changes will be applied to the database.
+<<:make Populate the relational database>>=
+tcga.db:
+	cat $? | sqlite3 $@
+
+@
+In the amplification data matrix, column labels denote patients.
+In the transcript level matrix, column labels denote samples.
+Both patients and samples are labeled by a [TCGA barcode](https://wiki.nci.nih.gov/display/TCGA/TCGA+barcode).
+Those barcodes contain meta-information: for example, using the barcode, we can separate solid tumor samples from healthy tissue control samples in the transcript level data matrix.
+
+The different identifiers within a barcode are described in "code table reports" [available for download](https://tcga-data.nci.nih.gov/datareports/codeTablesReport.htm).
+The following three code table reports are relevant for us:
+<<:source tcga/portion_analyte.tsv>>=
+<<:source tcga/sample_type.tsv>>=
+<<:source tcga/tissue_source_site.tsv>>=
+@
+
+<<:make Code table reports to the database>>=
+tcgatables := $(patsubst %.tsv,%.create-table.sql,$(wildcard tcga/*.tsv))
+tcga.db: $(tcgatables)
+@
+
+Which are the "tumor" samples?
+<<tumors.query.sql>>=
+SELECT * FROM sample_type
+WHERE "Definition" LIKE '%tumor%';
+<<:table tumors.sql-result>>=
+title: Tumor sample types.
+caption: We are most interested in the type "Primary solid Tumor".
+@
+
+<<:make Run a query on the relational database>>=
+%.sql-result: tcga.db sql-result.bash %.query.sql
+	bash sql-result.bash $*.query.sql \
+	    | sqlite3 tcga.db \
+	    > $@
+
+@
+
+A script that runs a query so that the results are returned as an HTML table with headers.
+<<sql-result.bash>>=
+echo '.mode html'
+echo '.headers on'
+cat "$1"
+@
+
+All that is left is to link the barcodes used in the two data matrices to these tables.
+To do that, we use two tables that have the complete barcode as a unique identifier, and the fields of the barcode as the rest of the columns.
+
+The amplification matrix uses "Patient" barcodes as column labels.
+<<ampl.colnames.awk>>=
+BEGIN {
+    FS = "-"; OFS = "\t"
+    print "Barcode", "TSS Code", "Patient"
+}
+{ print $0, $2, $3 }
+@
+
+The transcript level matrix uses "Analyte" barcodes as column labels.
+<<mrna.colnames.awk>>=
+BEGIN {
+    FS = "-"; OFS = "\t"
+    print "Barcode", "TSS Code", "Patient",
+          "Sample", "Vial", "Portion", "Analyte"
+}
+{
+    sample_type = substr($4, 1, 2);
+    vial = substr($4, 3, 1);
+    portion = substr($5, 1, 2);
+    analyte = substr($5, 3, 1);
+    print $0, $2, $3,
+          sample_type, vial, portion, analyte;
+}
+@
+
+<<:make Matrix column labels to files>>=
+%_cols.tsv: %.colnames %.colnames.awk
+	< $*.colnames <<Tab-separated fields to lines>>  \
+	    | awk -f $*.colnames.awk \
+	    > $@
+
+<<Tab-separated fields to lines>>=
+tr "\t" "\n"
+@
+
+<<:make Matrix column label files to the database>>=
+tcga.db: ampl_cols.create-table.sql mrna_cols.create-table.sql
+@
+
+What kinds of samples are there in the transcript level matrix?
+<<samples.query.sql>>=
+SELECT
+  count("Sample") as n,
+  "Definition"
+FROM mrna_cols
+  INNER JOIN sample_type
+    ON mrna_cols."Sample" = sample_type."Code"
+GROUP BY "Definition"
+ORDER BY n DESC;
+<<:table samples.sql-result>>=
+title: Sample types in transcript levels matrix.
+caption: Most of the samples are from tumors, but some have associated normal tissue controls.
+@
+
+<<patients-in-mrna.query.sql>>=
+SELECT count(*) as "Number of patients" FROM (
+  SELECT DISTINCT "TSS Code", "Patient"
+  FROM mrna_cols
+);
+<<:table patients-in-mrna.sql-result>>=
+title: Number of unique patients.
+@
+
+<<patients-with-control.query.sql>>=
+SELECT count(*) AS n FROM (
+  SELECT x."TSS Code", x."Patient"
+  FROM mrna_cols AS x
+    INNER JOIN mrna_cols AS y
+      ON x."TSS Code" = y."TSS Code"
+        AND x."Patient" = y."Patient"
+        AND x."Sample" < y."Sample"
+);
+<<:table patients-with-control.sql-result>>=
+title: Number of patients with control sample.
+caption: This counts all patients that have both tumor and normal solid tissue sample in the transcript level matrix.
+@
+
+How many are the patients from the amplification matrix for which we have tumor samples in the transcript level matrix?
+<<patients-tumors.query.sql>>=
+SELECT count(*) AS 'Cancer patient count'
+FROM ( <<ampl-mrna.fragment.sql>> );
+@
+
+This SQL query fragment creates a with two columns.
+In the `ampl` column will be the patient barcodes, and in the `mrna` column the solid tumor sample barcodes of the same patients.
+<<ampl-mrna.fragment.sql>>=
+SELECT
+  ampl_cols."Barcode" AS ampl,
+  mrna_cols."Barcode" AS mrna
+FROM ampl_cols
+  INNER JOIN mrna_cols
+    USING ("TSS Code", "Patient")
+  INNER JOIN sample_type
+    ON mrna_cols."Sample" = sample_type."Code"
+WHERE sample_type."Definition" = 'Primary solid Tumor'
+<<:table patients-tumors.sql-result>>=
+title: Useful number of patients.
+caption: These are the patients that have an amplification status, and a transcript level from a solid tumor sample.
+@
+
+Finally, for convenience, we add the Ensembl ID to Gene name mapping downloaded from Ensembl to the database, too.
+Even though we are able to query this file with the help of Awk and Bash, as demonstrated by [[<<sanity-check.bash>>]] and [[<<ID from name .awk>>]], it is unnecessarily hacky.
+<<:make Ensembl IDs and names to the database>>=
+tcga.db: ensembl/id_descr_name.create-table.sql
+@
+
+Now, to get the Ensembl IDs of genes, it is enough to say:
+<<erbb2-stard3-ids.query.sql>>=
+SELECT
+  "Associated Gene Name",
+  "Ensembl Gene ID"
+FROM id_descr_name
+WHERE "Associated Gene Name" IN ( 'ERBB2', 'STARD3' );
+<<:table erbb2-stard3-ids.sql-result>>=
+title: Ensembl IDs of _ERBB2_ and _STARD3_.
+@
+
+Note that the queries above double as an informal validation for the database.
+
+# Gene association
+We will try to find a correlation of the amplification status or the transcript levels between pairs of this set of genes:
+<<Genes of interest>>=
+"STARD3", "ERBB2", "NDRG1", "LAPTM4B", "LAPTM4A"
+@
+
+## Pairs of genes
+To generate the pairs of genes, we could say:
+<<:dummy Generate pairs>>=
+list = { <<Genes of interest>> };
+for (i = 0; i < length(list); ++i)
+    for (j = i+1; j < length(list); ++j)
+        compare(list[i], list[j]);
+@
+
+However, we can achieve the same, and more, with SQL:
+<<genes-of-interest-pairs.query.sql>>=
+SELECT DISTINCT
+  x."Associated Gene Name" AS name1,
+  y."Associated Gene Name" AS name2,
+  x."Ensembl Gene ID" AS id1,
+  y."Ensembl Gene ID" AS id2
+FROM id_descr_name AS x, id_descr_name AS y
+WHERE name1 IN ( <<Genes of interest>> )
+  AND name2 IN ( <<Genes of interest>> )
+  AND name1 < name2
+ORDER BY name1;
+@
+
+This implicit rule keeps the headers, so the resulting `*.tsv-result` file can be loaded from R using `read.delim` with the default parameters.
+<<:make Results of a query to a file>>=
+%.tsv-result: tcga.db sql-tsv.bash %.query.sql
+	bash sql-tsv.bash $*.query.sql \
+	    | sqlite3 tcga.db \
+	    > $@
+
+@
+
+This is the bash script that sets the mode and turns on the headers.
+<<sql-tsv.bash>>=
+echo '.mode tabs'
+echo '.headers on'
+cat "$1"
+@
+
+## Association results
+Now, using this, we can read this file from R and use it to extract the relevant genes (rows) from the amplification status and transcript level matrices.
+<<:make>>=
+genes-of-interest.Rsave: genes-of-interest.R \
+                         genes-of-interest-pairs.tsv-result \
+                         columns-of-interest.tsv-result \
+                         input-data.Rsave
+	Rscript --vanilla $^ $@
+
+fig.genes-of-interest.%: plot-genes-of-interest.R \
+                         genes-of-interest.Rsave
+	Rscript --vanilla $^ $@ $*
+
+<<columns-of-interest.query.sql>>=
+<<ampl-mrna.fragment.sql>>;
+@
+
+To summarize some of the useful information in this subset of the data, we perform a $\chi^2$ test on the amplification status from both genes, and a Pearson's correlation test on the transcript levels from both genes.
+<<genes-of-interest.R>>=
+args.names <- c("from.file", "cols.file", "save.file", "result.file")
+<<Read and name R command line arguments>>
+<<Load genes of interest data from files>>
+<<Keep only the overlapping columns>>
+
+correlation <- function(x) {
+    n1 <- x[1]
+    n2 <- x[2]
+    a1 <- ampl[x[3],]
+    a2 <- ampl[x[4],]
+    t1 <- mrna[x[3],]
+    t2 <- mrna[x[4],]
+
+    chisq.test(a1, a2) -> chisq.r
+
+    <<Color mRNA scatter plot R function>>
+    scatter.plot.col(a1, a2) -> mrna.colors
+    cor.test(t1, t2, method="pearson") -> cor.r
+
+    list(name.a=n1, name.b=n2,
+         chisq.result=chisq.r,
+         transcript.a=t1, transcript.b=t2,
+         mrna.col=mrna.colors,
+         pearson.estimate=cor.r$estimate)
+}
+
+apply(pairs, 1, correlation) -> result
+save(result, file=args["result.file"])
+@
+<<:result fig.genes-of-interest.pdf>>=
+<<:figure fig.genes-of-interest.svg>>=
+title: The results for all possible pairs.
+caption: |
+    The first two plots, a positive control.
+    _STARD3_ and _ERBB2_ are on the same amplicon and are known to be co-amplified and co-overexpressed in breast canser patient samples.
+    
+    There is no correlation between _NRDG1_ and _STARD3_.
+    They are not co-amplified and the transcript levels do not correlate.
+    
+    _LAPTM4B_ and _STARD3_ are not co-amplified.
+    On the transcript level however there is a moderate positive correlation between the two.
+    
+    _LAPTM4B_ is co-amplified with _NDRG1_. 
+    This is reflected in the correlation of the transcript levels of the two genes.
+@
+
+<<Load genes of interest data from files>>=
+as.matrix(read.delim(args["from.file"])) -> pairs
+as.matrix(read.delim(args["cols.file"])) -> cols
+load(args["save.file"])
+@
+<<Keep only the overlapping columns>>=
+ampl <- ampl[,cols[,"ampl"]]
+mrna <- mrna[,cols[,"mrna"]]
+@
+
+
+## Plotting the results
+The names are used to label the axes.
+The transcript levels are used for the scatter plot.
+The generated colors for the scatter plot were generated above.
+This uses the list of values to draw summary plots.
+<<plot-genes-of-interest.R>>=
+args.names <- c("result.file", "fig.file", "format")
+<<Read and name R command line arguments>>
+load(args["result.file"])
+
+<<Open graphics device R function>>
+r <- length(result)
+open.device(args["format"], 
+            args["fig.file"],
+            width=5.6, height=r*3.8,
+            pointsize=14)
+<<Define layout for correlation plots R function>>
+cor.plots.layout(r)
+
+<<Draw correlation plots R function>>
+lapply(result, draw.cor.plots) -> foo
+
+dev.off() -> foo
+@
+
+Unfortunately, I could not figure out an easy way to choose the graphics device at run-time.
+Instead, I am using this hack to open the correct device based on a character argument:
+<<Open graphics device R function>>=
+open.device <- function(format, ...) {
+    if (format == "pdf") {
+        pdf(...)
+    } else if (format == "svg") {
+        svg(...)
+    }
+}
+@
+
+This defines a layout with as many rows as items in the `result` variable, and splits each row in two columns.
+<<Define layout for correlation plots R function>>=
+cor.plots.layout <- function(r) {
+    layout(matrix(1:(2*r), nrow=r, ncol=2, byrow=T),
+           widths=c(4,7),
+           heights=rep(1, r))
+}
+@
+
+When below a limit, display numerical value differently.
+<<Generate a subtitle>>=
+make.subtitle.str <- function(str, limit, prec, x) {
+    if (x < limit) {
+        subtitle.str <- paste(str, "<", limit)
+    } else {
+        subtitle.str <- paste(str, "=", round(x, prec))
+    }
+}
+@
+
+<<Draw correlation plots R function>>=
+draw.cor.plots <- function(x) {
+    <<Generate a subtitle>>
+    ampl.col <- hcl(c(150,330), l=67)
+    <<Draw a barplot to visualize amplification status correlation>>
+    <<Draw a scatter plot to visualize transcript level correlation>>
+}
+@
+
+This uses the observed $2 \times 2$ contingency table from the $\chi^2$ test to plot each value as a bar height.
+<<Draw a barplot to visualize amplification status correlation>>=
+subtitle.str <- make.subtitle.str("p-val", 0.005, 3, x$chisq.result$p.value)
+cont.table <- t(x$chisq.result$observed)
+foo <- c("basal", "amplified")
+dimnames(cont.table) <- list(foo, foo)
+
+barplot(cont.table, beside=T,
+        col=ampl.col,
+        main="Amplification",
+        sub=subtitle.str,
+        xlab=paste(x$name.a),
+        ylab="number of patients")
+
+legend("topright",
+       title=paste(x$name.b),
+       legend=foo,
+       fill=ampl.col, border=ampl.col,
+       bty="n")
+@
+
+<<Draw a scatter plot to visualize transcript level correlation>>=
+subtitle.str <- make.subtitle.str("cor", 0.1, 2, x$pearson.estimate)
+plot(x$transcript.a, x$transcript.b,
+     col=x$mrna.col,
+     main=paste("Transcipt levels"),
+     sub=subtitle.str,
+     xlab=x$name.a, ylab=x$name.b,
+     bty="n")
+
+legend("topleft",
+    title = "Amplification",
+    legend = c("amplified", "basal", "different"),
+    pch = c(1, 1, 1),
+    col=c("darkred", "darkblue", "olivedrab"),
+    bty = "n")
+@
+
+In addition to using the actual transcript levels from the two patients, it also uses the amplification status for each patient to draw the circle in blue (both negative), red (both positive), or green (different).
+This implementation works because the amplification statuses of both genes are represented as logical vectors, and we know that all `NA`'s have been substituted with `FALSE`.
+When used in ordinary arithmetic, [logical vectors are coerced into numeric vectors](https://cran.r-project.org/doc/manuals/r-release/R-intro.html#Logical-vectors), with `FALSE = 0` and `TRUE = 1`.
+<<Color mRNA scatter plot R function>>=
+scatter.plot.col <- function(a1, a2) {
+    c("darkblue", "olivedrab", "darkred")[1+a1+a2]
+}
+@
+
+# Survival
+The next question is whether there is a correlation between gene amplification and transcription levels and patient survival.
+
+## Clinical patient data
+The data on patient survival is extracted from a table with many cliniclal parameters.
+<<:source clinical/clinical_patient_all_brca.txt>>=
+<<:listing clinical-column-number>>=
+title: Number of columns.
+caption: |
+    Each column in this matrix is one clinical parameter of that patient.
+    The majority are not interesting at this stage.
+<<:make>>=
+clinical-column-number: clinical/clinical_patient_all_brca.txt
+	< $< <<Get first row>> | wc --words > $@
+
+@
+
+Which could be the relevant rows?
+Time is likely to be measured in days or months.
+<<:listing clinical-relevant-columns>>=
+title: Columns that could be relevant.
+caption: We need the days to death (25), and last followup (27) or last known alivem (28), whichever is longer.
+<<:make>>=
+clinical-relevant-columns: clinical/clinical_patient_all_brca.txt
+	< $< <<Get first row>> \
+	    | <<Tab-separated fields to lines>> \
+	    | grep --line-number 'days\|months' \
+	    > $@
+
+@
+
+Extract the relevant columns only: Patient barcode (1), and days to death (25), to last followup (27), and to last known alive (28).
+<<:make>>=
+patient-days: clinical/clinical_patient_all_brca.txt
+	< $^ <<Drop first row>> | cut --fields=1,25,27,28 > $@
+
+@
+
+Note that column 26, "Days to initial pathologic diagnosis", has a value of 0 for every one of the 863 patients:
+<<:listing days-to-initial>>=
+title: A useless column.
+<<:make>>=
+days-to-initial: clinical/clinical_patient_all_brca.txt
+	<<Drop first row>> $< | cut --fields=26 | sort | uniq -c > $@
+
+@
+
+Are there field values that are _not_ numbers?
+Which are they?
+How many of each?
+<<:listing patient-days-nans>>=
+title: Field values that are not numbers.
+caption: |
+    There is only one value that is not a number: the string "[Not Available]".
+<<:make>>=
+patient-days-nans: nan-fields.sh patient-days
+	bash $^ > $@
+
+@
+<<nan-fields.sh>>=
+<<Drop first row>> "$1" \
+    | <<Drop first column>> \
+    | <<Tab-separated fields to lines>> \
+    | sed -n '/^[0-9.]\+$/!p' \
+    | sort \
+    | uniq --count
+@
+
+<<:make Normalized patient survival file>>=
+patient_survival.rows-tsv: patient_survival.awk patient-days
+	awk -f $^ > $@
+
+@
+
+To prepare this table for the database, we normalize it first.
+This means that there will be one record in the database for each Patient-Value combination.
+All "[Not Available]" values will be skipped.
+<<patient_survival.awk>>=
+BEGIN {
+    FS = "\t" ; OFS = "\t"
+    col[2] = "Death"
+    col[3] = "Last followup"
+    col[4] = "Last known alive"
+}
+{
+    for (i = 2; i <= 4; ++i) {
+        if ($i != "[Not Available]") {
+            print $1, col[i], $i
+        }
+    }
+}
+@
+
+The normalized table is inserted to the relational database.
+<<:make Patient survival to the database>>=
+tcga.db: patient_survival.define-insert-table.sql
+
+@
+
+Because the last column in the database is a number, it is better to manually define the schema for the table that is going to hold this data.
+<<patient_survival.schema.sql>>=
+CREATE TABLE patient_survival (
+  "Barcode" TEXT,
+  "Event" TEXT,
+  "Days" INTEGER
+);
+@
+
+<<:make Implicit rule for SQL tables with an explicit schema>>=
+%.define-insert-table.sql: define-insert-table.bash %.schema.sql %.rows-tsv
+	bash $^ > $@
+
+@
+
+In addition to [[<<create-table.bash>>]], this script takes an explicitly defined schema.
+<<define-insert-table.bash>>=
+NAME=$(basename --suffix=.schema.sql "$1")
+echo 'DROP TABLE IF EXISTS "'"$NAME"'";'
+cat "$1"
+echo '.separator "\t"'
+echo ".import '$2' $NAME"
+@
+
+## Long-term survival
+We already know from [[<<:table patients-tumors.sql-result>>]] that there are 516 patients for whom we have both amplification and transcript level data.
+Now we can ask, for how many of them do we have an event (patient dies) within the first 5 years?
+<<five-year-events.query.sql>>=
+WITH ampl_mrna AS ( <<ampl-mrna.fragment.sql>> )
+SELECT count(*) AS "Number of events"
+FROM patient_survival
+  INNER JOIN ampl_mrna
+    ON ampl_mrna.ampl = "Barcode"
+WHERE "Event" = 'Death'
+  AND "Days" < 365*5;
+<<:table five-year-events.sql-result>>=
+title: Number of events within the first 5 years.
+@
+
+And finally, we need a table that we can use to do the survival statistics in R.
+For the survival statistics, we need at the very least a table with two columns: one with the follow-up times, and one with the status indicator with 0 for alive and 1 for dead.
+We also will need the patient barcodes for the amplification dataset and the sample barcode for the transcript level dataset.
+<<survival-table.query.sql>>=
+WITH
+  ampl_mrna AS ( <<ampl-mrna.fragment.sql>> ),
+  patient_event_time AS (
+    SELECT
+      "Barcode" AS barcode,
+      "Event" AS event,
+      MAX("Days"/365.25) AS years
+    FROM patient_survival
+    GROUP BY barcode
+  )
+SELECT
+  ampl AS ampl_patient,
+  mrna AS mrna_sample,
+  CASE
+    WHEN event = 'Death' AND years <= 5 THEN 1
+    WHEN event <> 'Death' OR years > 5 THEN 0
+  END AS status,
+  CASE
+    WHEN years <= 5 THEN years
+    ELSE 5
+  END AS time
+FROM patient_event_time
+  INNER JOIN ampl_mrna ON ampl_patient = barcode;
+@
+
+And, of course, the IDs of the genes we are interested in:
+<<survival-genes.query.sql>>=
+SELECT
+  "Associated Gene Name" AS name,
+  "Ensembl Gene ID" AS id
+FROM id_descr_name
+WHERE name IN ('STARD3', 'LAPTM4B', 'NDRG1', 'SERPINA1');
+@
+
+In order to avoid loading the complete data matrices multiple times, we will load them once and save only the four genes of interest, and only the columns we need.
+<<:make>>=
+survival-genes.Rsave: survival-genes.R \
+                      input-data.Rsave \
+                      survival-table.tsv-result \
+                      survival-genes.tsv-result
+	Rscript --vanilla $^ $@
+
+@
+<<survival-genes.R>>=
+args.names <- c("input.file",
+                "clinical.file",
+                "genes.file",
+                "save.file")
+<<Read and name R command line arguments>>
+
+read.delim(args["clinical.file"]) -> clinical
+attach(clinical)
+as.character(ampl_patient) -> ampl.patient
+as.character(mrna_sample) -> mrna.sample
+
+load(args["input.file"])
+ampl[,ampl.patient] -> ampl
+mrna[,mrna.sample] -> mrna
+
+as.matrix(read.delim(args["genes.file"])) -> genes
+
+ampl.survival <- ampl[genes[,"id"],]
+rownames(ampl.survival) <- genes[,"name"]
+mrna.survival <- mrna[genes[,"id"],]
+rownames(mrna.survival) <- genes[,"name"]
+
+save(status, time, ampl.survival, mrna.survival, file=args["save.file"])
+<<:result survival-genes.Rsave>>=
+@
+
+## Effects on long-term patient survival
+Now we determine the correlation between the amplification status, transcipt levels, and patient survival.
+First, we split patients in two groups.
+For the amplification data, the two groups are "basal" and "amplified".
+For the transcript level data, the two groups are simply levels below and above the median within this gene.
+<<:make>>=
+%-survival-curve.svg: survival-curve.R survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ svg
+
+%-survival-curve.pdf: survival-curve.R survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ pdf
+
+<<:figure SERPINA1-survival-curve.svg>>=
+title: Survival curve for _SERPINA1_.
+caption: _SERPINA1_ amplification status and transcript levels are positively correlated with patient survival, as reported previously.
+<<:figure STARD3-survival-curve.svg>>=
+title: Survival curve for _STARD3_.
+<<:figure NDRG1-survival-curve.svg>>=
+title: Survival curve for _NDRG1_.
+caption: |
+    _NDRG1_ amplification and upregulation of transcript levels both have a weak negative effect on breast cancer patient survival.
+<<:figure LAPTM4B-survival-curve.svg>>=
+title: Survival curve for _LAPTM4B_.
+caption: |
+    _LAPTM4B_ amplification has a statistically significant effect on the survival of breast cancer patients.
+    Transcript levels upregulation exhibits a similar tendency, but the difference is not statistically significant.
+@
+<<:result SERPINA1-survival-curve.pdf>>=
+<<:result NDRG1-survival-curve.pdf>>=
+<<:result LAPTM4B-survival-curve.pdf>>=
+@
+
+<<survival-curve.R>>=
+args.names <- c("save.file", "gene.name", "fig.file", "format")
+<<Read and name R command line arguments>>
+<<Load survival saved state>>
+<<Survival statistics>>
+
+<<Open graphics device R function>>
+open.device(args["format"],
+            args["fig.file"], width=8, height=4.4, pointsize=11)
+par(mfrow=c(1,2))
+<<Plot survival R function>>
+plot.survival(list(fit=survfit.ampl, diff=survdiff.ampl),
+              main.text="Amplification",
+              title.text=paste(gn, "amplification"),
+              legend.text=c("basal", "amplified"))
+plot.survival(list(fit=survfit.mrna, diff=survdiff.mrna),
+              main.text="Transcript levels",
+              title.text=paste(gn, "transcript"),
+              legend.text=c("below median", "above median"))
+dev.off() -> foo
+@
+
+<<Load survival saved state>>=
+load(args["save.file"])
+args["gene.name"] -> gn
+ampl.survival[gn,] -> ampl
+mrna.survival[gn,] -> mrna
+@
+
+The survival statistics are done with the help of `library(survival)`.
+<<Survival statistics>>=
+mrna > median(mrna) -> mrna.high
+
+library(survival)
+
+Surv(time, status) -> so
+survfit(so ~ ampl) -> survfit.ampl
+survdiff(so ~ ampl) -> survdiff.ampl
+survfit(so ~ mrna > median(mrna, na.rm=T)) -> survfit.mrna
+survdiff(so ~ mrna > median(mrna, na.rm=T)) -> survdiff.mrna
+@
+
+The p-value is calculated from the $\chi^2$ test statistic with one degree of freedom (this is always the case, since we always have two groups, and both have patients in them).
+A table with the "numbers at risk" is added to directly to the plot.
+<<Plot survival R function>>=
+plot.survival <- function(x, main.text, title.text, legend.text) {
+    pval <- 1 - pchisq(x$diff$chisq, 1)
+    cols <- c("darkblue", "darkred")
+    plot(x$fit,
+         main=main.text,
+         ylab="Survival", xlab="Years",
+         xlim=c(-0.4,5.3), ylim=c(0.5,1),
+         col=cols,
+         bty="n")
+    legend("bottomleft",
+           legend=legend.text,
+           lty=1,
+           bty="n",
+           col=cols)
+    legend("bottomright",
+           bty="n",
+           legend=paste("p=", signif(pval, digits=2), sep=""))
+    text(x=-0.3, y=0.71, labels="Numbers at risk", pos=4, offset=0)
+    text(x=0:5,
+         y=rep(c(0.67,0.63), each=6),
+         col=rep(cols, each=6),
+         labels=summary(x$fit, times=0:5)$n.risk)
+}
+@
+
+Is there an additive (negative) effect of _LAPTM4B_ and _NDRG1_ on patient survival?
+<<:make>>=
+%-survival-curve-combined.svg: survival-curve-combined.R \
+                               survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ svg
+
+%-survival-curve-combined.pdf: survival-curve-combined.R \
+                               survival-genes.Rsave
+	Rscript --vanilla $^ $* $@ pdf
+
+@
+<<:figure NDRG1-LAPTM4B-survival-curve-combined.svg>>=
+title: Combined effect of _NDRG1_ and _LAPTM4B_ on survival.
+caption: |
+    On the left hand side the patients are separated in two groups: in the group "both high" (in red), the transcript levels for both patients are above median.
+    In the other group, "different" (in blue), are all other patients.
+    On the right hand side, patients with different mRNA expression levels for the two trancripts were removed from the data set.
+    In the "high" group (in red) are the patients with both transcript levels high, while in the "low" group (in blue) are the patients that have both transcript levels low.
+<<:result NDRG1-LAPTM4B-survival-curve-combined.pdf>>=
+@
+<<survival-curve-combined.R>>=
+args.names <- c("save.file", "gene1.gene2.names", "fig.file", "format")
+<<Read and name R command line arguments>>
+<<Names and transcript levels of the two genes>>
+apply(mrna, 1, median, na.rm=T) -> mrna.median
+mrna > mrna.median -> is.high
+apply(is.high, 2, all) -> both.high
+
+library(survival)
+<<Patient survival: both high vs. different>> -> high.different
+<<Patient survival: both high vs. both low>> -> high.low
+
+<<Open graphics device R function>>
+open.device(args["format"],
+            args["fig.file"], width=8, height=4.4, pointsize=11)
+par(mfrow=c(1,2))
+<<Plot survival R function>>
+plot.survival(high.different,
+              main.text="Different vs. High",
+              legend.text=c("different", "both high"))
+plot.survival(high.low,
+              main.text="Low vs. High",
+              legend.text=c("both low", "both high"))
+dev.off() -> foo
+@
+<<Names and transcript levels of the two genes>>=
+load(args["save.file"])
+strsplit(args["gene1.gene2.names"],
+         split="-", fixed=T)[[1]] -> gene.names
+mrna.survival[gene.names,] -> mrna
+@
+<<Patient survival: both high vs. different>>=
+Surv(time, status) -> so
+list(fit=survfit(so ~ both.high), diff=survdiff(so ~ both.high))
+@
+<<Patient survival: both high vs. both low>>=
+mrna < mrna.median -> is.low
+apply(is.low, 2, all) -> both.low
+both.high | both.low -> filtered
+time[filtered] -> time.f
+status[filtered] -> status.f
+both.high[filtered] -> both.high.f
+
+Surv(time.f, status.f) -> so.f
+list(fit=survfit(so.f ~ both.high.f), diff=survdiff(so.f ~ both.high.f))
+@
+
+# Protein complexes regulated by micro-RNA
+Is there a correlation between the predicted targets of the same miRNA?
+This question is motivated by the known phenomenon of miRNA targetting a complex of functionally related proteins.
+The predicted targets are collected using a short-list of experimentally validated micro-RNAs.
+Then, these predicted targets for each gene are correlated to the gene using the available mRNA levels from patient solid tumors.
+
+## Micro-RNAs and predicted targets
+To answer this question, we will try to find experimentally validated micro-RNAs that target the genes of interest, as listed in [[<<Genes of interest>>]].
+We drop _STARD3_ from that list, as it correlates very strongly with _ERBB2_ and is far less studied experimentally; we also drop _LAPTM4A_, as it showed no correlation to any of the other genes, and is also poorly studied.
+We are left with _ERBB2_, _NDRG1_, and _LAPTM4B_.
+The main criteria for choosing a miRNA that targets each gene is that it downregulates the gene in the context of cancer progression.
+
+For _ERBB2_, hsa-miR-155-5p (MIMAT0000646) was shown to downregulate ErbB2 and suppress ErbB2-induced malignant transformation of breast epithelial cells by two distinct mechanism: repressing ErbB2 transcription, and directly targetting ErbB2 via a regulatory element  (doi:10.1038/onc.2016.132).
+
+For _NDRG1_, miR-769-3p (MIMAT0003887) was found to down-regulate _NDRG1_ in MCF-7 cells during reoxygenation (doi:10.1038/srep05908).
+
+For _LAPTM4B_, miR-188-5p (MIMAT0000457) was found to inhibit tumor growth and metastasis by repressing _LAPTM4B_ expression, acting as a tumor supressor (doi:10.18632/oncotarget.3341).
+
+Using miRWalk2.0:
+
+- Predicted Target Module $\rightarrow$ MicroRNA-Gene Targets
+- Human, miRBase, MIMATid
+- Identifiers:
+
+~~~~
+MIMAT0000646
+MIMAT0003887
+MIMAT0000457
+~~~~
+
+- Other databases: miRWalk, miRanda, miRDB, RNA22, Targetscan
+- "Putative target genes predicted by chosen algorithms within mRNA selected regions" $\rightarrow$ 3UTR
+
+The downloaded file:
+<<:source microrna/3utr-comparative.tsv>>=
+@
+
+What are the columns in this file?
+<<:listing microrna/table-header>>=
+title: Column labels.
+<<:make>>=
+microrna/table-header: microrna/3utr-comparative.tsv
+	<<Get first row>> $^ \
+	    | <<Tab-separated fields to lines>> \
+	    | nl \
+	    > $@
+
+@
+
+For now, we are interested in the miRNA identifier (1), the predicted target gene (3), the IDs of the mRNA sequences being targetted, and the number of positive predictions for that gene, commonly used as an indicator of the prediction strength (11).
+We will a table with these columns to the relational database.
+<<mirna.schema.sql>>=
+CREATE TABLE mirna (
+  mirna TEXT,
+  gene TEXT,
+  refseqid TEXT,
+  sum INTEGER
+);
+<<:make>>=
+tcga.db: mirna.define-insert-table.sql
+mirna.rows-tsv: microrna/3utr-comparative.tsv
+	<<Drop first row>> $^ \
+	    | cut --fields=1,3,5,11 \
+	    > $@
+
+@
+
+To be able to find the intersection of genes that are in the predicted targets, _and_ in the transcript level matrix, we will insert the row labels of the two matrices in the relational database.
+<<:make>>=
+tcga.db: ampl_rownames.create-table.sql \
+         mrna_rownames.create-table.sql
+%_rownames.tsv: %.rownames
+	echo "Ensembl Gene ID" > $@
+	cat $^ >> $@
+
+@
+
+To be able to caclulate the transcript level correlation for each of these genes, we need the Ensembl Gene IDs for the predictions for each of the three miRNAs.
+Note the reuse of `columns-of-interest.tsv-result`, generated in [[<<columns-of-interest.query.sql>>]].
+<<:make Calculate and save the mRNA correlation coefficients>>=
+mirna-mrna.Rsave: mirna-mrna.R \
+                  input-data.Rsave \
+                  columns-of-interest.tsv-result \
+                  mirna-genes.tsv-result \
+                  hsa-miR-155-5p.mirna-predictions.tsv \
+                  hsa-miR-188-5p.mirna-predictions.tsv \
+                  hsa-miR-769-3p.mirna-predictions.tsv
+	Rscript --vanilla $^ $@
+
+mirna-counts.txt: hsa-miR-155-5p.mirna-predictions.tsv \
+                  hsa-miR-188-5p.mirna-predictions.tsv \
+                  hsa-miR-769-3p.mirna-predictions.tsv
+	wc --lines $^ > $@
+
+%.mirna-predictions.tsv: mirna-predictions.bash tcga.db
+	bash $^ $* > $@
+
+@
+<<:listing mirna-counts.txt>>=
+title: Number of targets for each gene.
+@
+
+<<mirna-genes.query.sql>>=
+WITH gene_mirna ("Associated Gene Name", mirna) AS (
+  VALUES
+    ('ERBB2', 'hsa-miR-155-5p'),
+    ('NDRG1', 'hsa-miR-769-3p'),
+    ('LAPTM4B', 'hsa-miR-188-5p')
+)
+SELECT
+  "Associated Gene Name" AS name,
+  "Ensembl Gene ID" AS id,
+  mirna
+FROM id_descr_name
+  NATURAL INNER JOIN gene_mirna;
+@
+<<:result mirna-genes.tsv-result>>=
+@
+<<mirna-predictions.bash>>=
+sqlite3 "$1" << end_of_file
+.header on
+.separator "\t"
+WITH gene_count_sum AS (
+  SELECT
+    gene,
+    count(refseqid) AS count,
+    sum
+  FROM mirna
+  WHERE mirna = '$2'
+  GROUP BY gene, sum
+)
+SELECT DISTINCT
+  gene,
+  "Ensembl Gene ID" AS id
+FROM gene_count_sum
+  INNER JOIN id_descr_name
+    ON gene = "Associated Gene Name"
+  NATURAL INNER JOIN ampl_rownames
+  NATURAL INNER JOIN mrna_rownames
+WHERE sum >= 4
+  OR (sum = 3 AND count >= 2);
+end_of_file
+@
+<<mirna-mrna.R>>=
+args.names <- c("input",
+                "cols",
+                "genes",
+                "one",
+                "two",
+                "three",
+                "result")
+<<Read and name R command line arguments>>
+
+as.matrix(read.delim(args["genes"])) -> mirna.gene.id
+mirna.gene.id[,c("name","id")] -> gene.id
+mirna.gene.id[,"mirna"] -> rownames(gene.id)
+
+<<Load miRNA targets R function>>
+lapply(list("one", "two", "three"),
+       load.mirna.targets) -> mirna.targets
+lapply(mirna.targets,
+       function(x) { x$gene["name"] }) -> names(mirna.targets)
+
+load(args["input"])
+as.matrix(read.delim(args["cols"])) -> cols
+<<Keep only the overlapping columns>>
+
+pearson.cor <- function(x, y) {
+    cor.test(x, y, method="pearson")$estimate
+}
+
+<<Shortlist highly correlated targets R function>>
+lapply(mirna.targets, target.cor) -> gene.complex
+
+save(gene.complex, file=args["result"])
+@
+
+<<Load miRNA targets R function>>=
+load.mirna.targets <- function(arg.name) {
+    strsplit(args[arg.name],
+             split=".", fixed=T)[[1]][1] -> mirna.name
+    as.matrix(read.delim(args[arg.name])) -> mirna.targets
+    mirna.targets[,"id"] -> target.ids
+    mirna.targets[,"gene"] -> names(target.ids)
+    list(mirna=mirna.name,
+         gene=gene.id[mirna.name,],
+         targets=target.ids)
+}
+@
+<<Shortlist highly correlated targets R function>>=
+target.cor <- function(x) {
+    mrna[x$gene["id"],] -> gene.mrna
+    mrna[x$targets,] -> targets.mrna
+    names(x$targets) -> rownames(targets.mrna)
+    apply(targets.mrna, 1, pearson.cor, gene.mrna) -> target.cors
+    sort(target.cors[target.cors > 0.33], decreasing=T) -> shortlist
+    targets.mrna[names(shortlist),] -> targets.mrna
+    ampl[x$gene["id"],] -> gene.ampl
+    ampl[x$targets,] -> targets.ampl
+    names(x$targets) -> rownames(targets.ampl)
+    targets.ampl[names(shortlist),] -> targets.ampl
+    
+    list(mirna=x$mirna,
+         hits=shortlist,
+         gene.ampl=gene.ampl,
+         ampl=targets.ampl,
+         gene.mrna=gene.mrna,
+         mrna=targets.mrna)
+}
+@
+
+<<:listing mirna-mrna-result.txt>>=
+title: The predicted targets with high correlation on the transcript level.
+@
+<<:make>>=
+mirna-mrna-result.txt: mirna-mrna-result.txt.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@
+
+@
+<<mirna-mrna-result.txt.R>>=
+args.names <- c("data", "result")
+<<Read and name R command line arguments>>
+load(args["data"])
+
+print.gene.complex <- function(i) {
+    cat("Gene: ", names(gene.complex)[[i]], "\n")
+    cat("miRNA: ", gene.complex[[i]]$mirna, "\n")
+    cat("Targets:\n")
+    print(names(gene.complex[[i]]$hits))
+    cat("\n")
+}
+
+sink(file=args["result"])
+options(width=40)
+lapply(seq_along(gene.complex), print.gene.complex) -> foo
+sink(file=NULL)
+@
+
+Which are the interesting hits in this shortlist?
+
+For _LAPTM4B_, there are several interesting hits.
+One is _PVR_, encoding the Poliovirus receptor protein, which mediates natural killer (NK) cell adhesion and triggers NK cell effector functions.
+It might provide tumors with a mechanism of immunoevasion, and it plays a role in mediating tumor cell invasion and migration.
+
+Another interesting gene is _SNX22_, encoding the Sorting nexin-22 protein, which may be involved in several stages of intracellular trafficking (By similarity).
+It interacts with membranes containing phosphatidylinositol 3-phosphate (PtdIns(3P)).
+
+Finally, _SPAST_ (Spastin) is a protein that is required for the membrane traffic from the ER to the Golgi.
+
+Now, visualize the amplification status and transcript level correlation between _LAPTM4B_ and each of these three genes, as available in the patient solid tumor samples.
+
+<<:make Draw correlation plots for miRNA targets>>=
+%-mirna.svg: plot-mirna-target.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@ $* svg
+
+%-mirna.pdf: plot-mirna-target.R mirna-mrna.Rsave
+	Rscript --vanilla $^ $@ $* pdf
+
+@
+<<:result LAPTM4B-PVR-mirna.pdf>>=
+<<:result LAPTM4B-SNX22-mirna.pdf>>=
+<<:result LAPTM4B-SPAST-mirna.pdf>>=
+<<:figure LAPTM4B-PVR-mirna.svg>>=
+title: _PVR_.
+<<:figure LAPTM4B-SNX22-mirna.svg>>=
+title: _SNX22_.
+<<:figure LAPTM4B-SPAST-mirna.svg>>=
+title: _SPAST_.
+@
+<<plot-mirna-target.R>>=
+args.names <- c("data", "plot", "genes", "format")
+<<Read and name R command line arguments>>
+load(args["data"])
+strsplit(args["genes"], split="-", fixed=T)[[1]] -> gene.names
+gene.names[1] -> gene.of.interest
+gene.names[2] -> mirna.target
+gene.complex[[gene.of.interest]] -> g
+a1 <- g$gene.ampl
+a2 <- g$ampl[mirna.target,]
+
+<<Color mRNA scatter plot R function>>
+col <- scatter.plot.col(a1, a2)
+
+<<Open graphics device R function>>
+open.device(args["format"], args["plot"],
+            width=7.5, height=5.2, pointsize=12)
+
+<<Define layout for correlation plots R function>>
+cor.plots.layout(1)
+
+<<Draw correlation plots R function>>
+
+draw.cor.plots(list(name.a=gene.of.interest,
+                    name.b=mirna.target,
+                    chisq.result=chisq.test(a1, a2),
+                    transcript.a=g$gene.mrna,
+                    transcript.b=g$mrna[mirna.target,],
+                    mrna.col=col,
+                    pearson.estimate=g$hits[mirna.target]))
+
+dev.off() -> foo
+@
