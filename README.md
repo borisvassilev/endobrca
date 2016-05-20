@@ -26,9 +26,9 @@ In addition to standard command line tools, the analysis
 requires [R](https://www.r-project.org/) and
 [SQLite](http://www.sqlite.org/), so you need reasonably recent
 versions of both installed on your computer.
-At that point you can make everything:
+At that point you can re-make everything:
 
 ~~~~
-$ make
+$ make clean && make
 ~~~~
 
